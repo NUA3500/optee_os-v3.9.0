@@ -14,8 +14,14 @@
 #include <stdint.h>
 #include <tee/entry_std.h>
 #include <tee/entry_fast.h>
+#include <io.h>
+#include <tsi_cmd.h>
 
-register_phys_mem_pgdir(MEM_AREA_IO_NSEC, CONSOLE_UART_BASE, UART0_REG_SIZE);
+register_phys_mem_pgdir(MEM_AREA_IO_NSEC, UART0_BASE, UART0_REG_SIZE);
+register_phys_mem_pgdir(MEM_AREA_IO_NSEC, SYS_BASE, SYS_REG_SIZE);
+register_phys_mem_pgdir(MEM_AREA_IO_SEC, TRNG_BASE, TRNG_REG_SIZE);
+register_phys_mem_pgdir(MEM_AREA_IO_SEC, TSI_BASE, TSI_REG_SIZE);
+register_phys_mem_pgdir(MEM_AREA_IO_SEC, WHC1_BASE, WHC1_REG_SIZE);
 
 static const struct thread_handlers handlers = {
 	.cpu_on = cpu_on_handler,
