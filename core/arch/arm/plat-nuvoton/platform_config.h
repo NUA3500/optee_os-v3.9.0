@@ -27,7 +27,7 @@
 #define CRYPTO_BASE		0x40300000UL
 #define CRYPTO_REG_SIZE		0x1000
 
-#define KS_BASE			0x40360000UL
+#define KS_BASE			0x40340000UL
 #define KS_REG_SIZE		0x1000
 
 #define TSI_BASE		0x40360000UL
@@ -52,6 +52,11 @@
 #define DRAM0_BASE		0x80000000
 #define DRAM0_SIZE		0x40000000
 
+#define SYS_CHIPCFG		0x1F4
+#define TSIEN			(0x1 << 8)
+
+#define TSI_PLL_SETTING		0x808CA0	// 160 MHz
+
 #else
 #error "Unknown platform flavor"
 #endif
@@ -59,8 +64,5 @@
 #ifdef CFG_WITH_LPAE
 #define MAX_XLAT_TABLES		5
 #endif
-
-#define SYS_CHIPCFG		0x1F4
-#define TSIEN			(0x1 << 8)
 
 #endif /*PLATFORM_CONFIG_H*/

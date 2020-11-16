@@ -23,11 +23,11 @@
 /*---------------------------------------------------------------------*/
 /*  NUA3500 TRNG registers                                             */
 /*---------------------------------------------------------------------*/
-#define CTRL			0x000
+#define CTRL			(trng_base + 0x000)
 #define CTRL_CMD_OFFSET			(0)
 #define CTRL_CMD_MASK			(0xf << 0)
 
-#define MODE			0x004
+#define MODE			(trng_base + 0x004)
 #define MODE_SEC_ALG			(0x1 << 0)
 #define MODE_PRED_RESET			(0x1 << 3)
 #define MODE_ADDIN_PRESENT		(0x1 << 4)
@@ -36,7 +36,7 @@
 #define MODE_KAT_SEL_OFFSET		(7)
 #define MODE_KAT_SEL_MASK		(0x3 << 7)
 
-#define SMODE			0x008
+#define SMODE			(trng_base + 0x008)
 #define SMODE_NONCE			(0x1 << 0)
 #define SMODE_MISSION_MODE		(0x1 << 1)
 #define SMODE_MAX_REJECTS_OFFSET	(2)
@@ -45,7 +45,7 @@
 #define SMODE_INDIV_HT_DISABLE_MASK	(0xff << 16)
 #define SMODE_NOISE_COLLECT		(0x1 << 31)
 
-#define STAT			0x00C
+#define STAT			(trng_base + 0x00C)
 #define STAT_LAST_CMD_OFFSET		(0)
 #define STAT_LAST_CMD_MASK		(0xf << 0)
 #define STAT_SEC_ALG			(0x1 << 4)
@@ -57,7 +57,7 @@
 #define STAT_STARTUP_TEST_IN_PROG	(0x1 << 10)
 #define STAT_BUSY			(0x1 << 31)
 
-#define IE			0x010
+#define IE			(trng_base + 0x010)
 #define IE_ZEROIZED			(0x1 << 0)
 #define IE_KAT_COMPLETED		(0x1 << 1)
 #define IE_NOISE_RDY			(0x1 << 2)
@@ -65,20 +65,20 @@
 #define IE_DONE				(0x1 << 4)
 #define IE_GLBL				(0x1 << 31)
 
-#define ISTAT			0x014
+#define ISTAT			(trng_base + 0x014)
 #define ISTAT_ZEROIZED			(0x1 << 0)
 #define ISTAT_KAT_COMPLETED		(0x1 << 1)
 #define ISTAT_NOISE_RDY			(0x1 << 2)
 #define ISTAT_ALARMS			(0x1 << 3)
 #define ISTAT_DONE			(0x1 << 4)
 
-#define ALARMS			0x018
+#define ALARMS			(trng_base + 0x018)
 #define ALARMS_FAILED_TEST_ID_OFFSET	(0)
 #define ALARMS_FAILED_TEST_ID_MASK	(0xf << 0)
 #define ALARMS_ILLEGAL_CMD_SEQ		(0x1 << 4)
 #define ALARMS_FAILED_SEED_ST_HT	(0x1 << 5)
 
-#define COREKIT_REL		0x01C
+#define COREKIT_REL		(trng_base + 0x01C)
 #define COREKIT_REL_REL_NUM_OFFSET	(0)
 #define COREKIT_REL_REL_NUM_MASK	(0xffff << 0)
 #define COREKIT_REL_EXT_VER_OFFSET	(16)
@@ -86,7 +86,7 @@
 #define COREKIT_REL_EXT_ENUM_OFFSET	(28)
 #define COREKIT_REL_EXT_ENUM_MASK	(0xf << 28)
 
-#define FEATURES		0x020
+#define FEATURES		(trng_base + 0x020)
 #define FEATURES_SECURE_RST_STATE	(0x1 << 0)
 #define FEATURES_DIAG_LEVEL_ST_HLT_OFFSET (1)
 #define FEATURES_DIAG_LEVEL_ST_HLT_MASK	(0x7 << 1)
@@ -95,15 +95,15 @@
 #define FEATURES_DIAG_LEVEL_NS		(0x1 << 7)
 #define FEATURES_PS_PRESENT		(0x1 << 8)
 #define FEATURES_AES_256		(0x1 << 9)
-#define RAND(x)			(0x024 + ((x) * 0x04))
+#define RAND(x)			(trng_base + 0x024 + ((x) * 0x04))
 #define RAND_WCNT			4
-#define NPA_DATA(x)		(0x034 + ((x) * 0x04))
+#define NPA_DATA(x)		(trng_base + 0x034 + ((x) * 0x04))
 #define NPA_DATA_WCNT			16
-#define SEED(x)			(0x074 + ((x) * 0x04))
+#define SEED(x)			(trng_base + 0x074 + ((x) * 0x04))
 #define SEED_WCNT			12
-#define TIME_TO_SEED		0x0d0
-#define BUILD_CFG0		0x0f0
-#define BUILD_CFG1		0x0f4
+#define TIME_TO_SEED		(trng_base + 0x0d0)
+#define BUILD_CFG0		(trng_base + 0x0f0)
+#define BUILD_CFG1		(trng_base + 0x0f4)
 
 /*
  *  CTL CMD[3:0]  commands
@@ -125,7 +125,7 @@ static int nua3500_trng_wait_busy_clear(vaddr_t trng_base)
 	uint32_t  mytime;
 
 	tee_time_get_sys_time(&t_start);
-	while (io_read32(trng_base + STAT) & STAT_BUSY) {
+	while (io_read32(STAT) & STAT_BUSY) {
 		tee_time_get_sys_time(&t_cur);
 		mytime = (t_cur.seconds - t_start.seconds) * 1000 +
 		    (int)t_cur.millis - (int)t_start.millis;
@@ -144,19 +144,19 @@ static int nua3500_trng_issue_command(vaddr_t trng_base, int cmd)
 	if (nua3500_trng_wait_busy_clear(trng_base) != 0)
 		return TEE_ERROR_TRNG_BUSY;
 
-	io_write32(trng_base + CTRL, (io_read32(trng_base + CTRL) &
+	io_write32(CTRL, (io_read32(CTRL) &
 		   ~CTRL_CMD_MASK) | (cmd << CTRL_CMD_OFFSET));
 
 	tee_time_get_sys_time(&t_start);
-	while (!(io_read32(trng_base + ISTAT) & ISTAT_DONE)) {
+	while (!(io_read32(ISTAT) & ISTAT_DONE)) {
 		tee_time_get_sys_time(&t_cur);
 		mytime = (t_cur.seconds - t_start.seconds) * 1000 +
 		    (int)t_cur.millis - (int)t_start.millis;
 
 		if (mytime > TRNG_BUSY_TIMEOUT) {
 			EMSG("TRNG command %d timeout! ISTAT=0x%x, SMODE=0x%x.\n",
-			     cmd, io_read32(trng_base + ISTAT),
-			     io_read32(trng_base + SMODE));
+			     cmd, io_read32(ISTAT),
+			     io_read32(SMODE));
 			return TEE_ERROR_TRNG_COMMAND;
 		}
 	}
@@ -167,9 +167,9 @@ static int nua3500_trng_gen_nonce(vaddr_t trng_base, uint32_t *nonce)
 {
 	int   i, j, loop, ret;
 
-	io_write32(trng_base + SMODE, io_read32(trng_base + SMODE) | SMODE_NONCE);
+	io_write32(SMODE, io_read32(SMODE) | SMODE_NONCE);
 
-	if (io_read32(trng_base + MODE) & MODE_SEC_ALG)
+	if (io_read32(MODE) & MODE_SEC_ALG)
 		loop = 3;
 	else
 		loop = 2;
@@ -179,7 +179,7 @@ static int nua3500_trng_gen_nonce(vaddr_t trng_base, uint32_t *nonce)
 			return TEE_ERROR_TRNG_BUSY;
 
 		for (j = 0; j < 16; j++)
-			io_write32(trng_base + NPA_DATA(j), nonce[j]);
+			io_write32(NPA_DATA(j), nonce[j]);
 
 		ret = nua3500_trng_issue_command(trng_base, TCMD_GEN_NONCE);
 		if (ret != 0)
@@ -217,40 +217,39 @@ static TEE_Result nua3500_trng_init(uint32_t types,
 	}
 
 	if (!(io_read32(sys_base + SYS_CHIPCFG) & TSIEN)) {
-		/*
-		 * Is not TSI mode.
-		 */
-		do {
-			io_write32(tsi_base + 0x100, 0x59);
-			io_write32(tsi_base + 0x100, 0x16);
-			io_write32(tsi_base + 0x100, 0x88);
-		} while (io_read32(tsi_base + 0x100) == 0UL);
+		if ((io_read32(tsi_base + 0x210) & 0x7) != 0x2) {
+			do {
+				io_write32(tsi_base + 0x100, 0x59);
+				io_write32(tsi_base + 0x100, 0x16);
+				io_write32(tsi_base + 0x100, 0x88);
+			} while (io_read32(tsi_base + 0x100) == 0UL);
 
-		io_write32(tsi_base + 0x240, 0x808C90);    /* PLL 240 MHz */
+			io_write32(tsi_base + 0x240, TSI_PLL_SETTING);
 
-		/* wait PLL stable */
-		while ((io_read32(tsi_base + 0x250) & 0x4) == 0)
-			;
+			/* wait PLL stable */
+			while ((io_read32(tsi_base + 0x250) & 0x4) == 0)
+				;
 
-		/* Select TSI HCLK from PLL */
-		io_write32(tsi_base + 0x210, (io_read32(tsi_base + 0x210) & ~0x7) |
-			   0x2);
-
+			/* Select TSI HCLK from PLL */
+			io_write32(tsi_base + 0x210, (io_read32(tsi_base +
+				   0x210) & ~0x7) | 0x2);
+		}
 		/* enable TRNG engine clock */
 		io_write32(tsi_base + 0x20c, io_read32(tsi_base + 0x20c) |
 			   (1 << 25));
 	}
+
 	if (nua3500_trng_wait_busy_clear(trng_base) != 0)
 		return TEE_ERROR_TRNG_BUSY;
 
-	if (io_read32(trng_base + STAT) &
+	if (io_read32(STAT) &
 		(STAT_STARTUP_TEST_STUCK | STAT_STARTUP_TEST_IN_PROG)) {
 		/* TRNG startup in progress state! */
 		return TEE_ERROR_TRNG_BUSY;
 	}
 
 	/* SELECT_ALG_AES_256 */
-	io_write32(trng_base + MODE, io_read32(trng_base + MODE) | MODE_SEC_ALG);
+	io_write32(MODE, io_read32(MODE) | MODE_SEC_ALG);
 
 	ret = nua3500_trng_gen_nonce(trng_base, nonce);
 	if (ret != 0)
@@ -260,8 +259,8 @@ static TEE_Result nua3500_trng_init(uint32_t types,
 	if (ret != 0)
 		return ret;
 
-	params[0].value.a = io_read32(trng_base + STAT);
-	params[0].value.b = io_read32(trng_base + ISTAT);
+	params[0].value.a = io_read32(STAT);
+	params[0].value.b = io_read32(ISTAT);
 
 	FMSG("TRNG init done.\n");
 	return TEE_SUCCESS;
@@ -303,7 +302,7 @@ static TEE_Result nua3500_trng_read(uint32_t types,
 		for (i = 0; i < 4; i++) {
 			if (rq_size < 4)
 				break;
-			*rdata = io_read32(trng_base + RAND(i));
+			*rdata = io_read32(RAND(i));
 			rdata++;
 			rq_size -= 4;
 			get_size += 4;
