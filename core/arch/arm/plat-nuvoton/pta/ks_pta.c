@@ -17,8 +17,7 @@
 
 #define PTA_NAME "nvt_ks.pta"
 
-#define USE_GEN_NONCE
-#define TRNG_BUSY_TIMEOUT	2000
+#define KS_BUSY_TIMEOUT		2000
 
 /*----------------------------------------------------------------------*/
 /*  NUA3500 Key Store registers                                         */
@@ -71,11 +70,26 @@
 static uint16_t _keylen2wcnt[21] = {4, 6, 6, 7, 8, 8, 8, 9, 12, 13, 16, 17,
 				    18, 0, 0, 0, 32, 48, 64, 96, 128};
 
+static bool is_timeout(TEE_Time *t_start, uint32_t timeout)
+{
+	TEE_Time  t_now;
+	uint32_t  time_elapsed;
+
+	tee_time_get_sys_time(&t_now);
+	time_elapsed = (t_now.seconds - t_start->seconds) * 1000 +
+		    (int)t_now.millis - (int)t_start->millis;
+
+	if (time_elapsed > timeout)
+		return true;
+	return false;
+}
+
 static TEE_Result nua3500_ks_init(void)
 {
 	vaddr_t sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_NSEC);
 	vaddr_t ks_base = core_mmu_get_va(KS_BASE, MEM_AREA_IO_SEC);
 	vaddr_t tsi_base = core_mmu_get_va(TSI_BASE, MEM_AREA_IO_SEC);
+	TEE_Time  t_start;
 
 	if (!(io_read32(sys_base + SYS_CHIPCFG) & TSIEN)) {
 		if ((io_read32(tsi_base + 0x210) & 0x7) != 0x2) {
@@ -106,12 +120,18 @@ static TEE_Result nua3500_ks_init(void)
 		io_write32(KS_CTL, KS_CTL_INIT | KS_CTL_START);
 
 		/* Waiting for init done */
-		while ((io_read32(KS_STS) & KS_STS_INITDONE) == 0)
-			;
+		tee_time_get_sys_time(&t_start);
+		while ((io_read32(KS_STS) & KS_STS_INITDONE) == 0) {
+			if (is_timeout(&t_start, 500) == true)
+				return TEE_ERROR_KS_FAIL;
+		}
 
 		/* Waiting for busy cleared */
-		while (io_read32(KS_STS) & KS_STS_BUSY)
-			;
+		tee_time_get_sys_time(&t_start);
+		while (io_read32(KS_STS) & KS_STS_BUSY) {
+			if (is_timeout(&t_start, 500) == true)
+				return TEE_ERROR_KS_FAIL;
+		}
 	}
 	return TEE_SUCCESS;
 }
@@ -123,6 +143,7 @@ static TEE_Result nua3500_ks_read(uint32_t types,
 	uint32_t  offset, cont_msk, remain_cnt;
 	uint32_t  *key_buff;
 	uint32_t  i, cnt;
+	TEE_Time  t_start;
 
 	if (types != TEE_PARAM_TYPES(TEE_PARAM_TYPE_VALUE_INPUT,
 				     TEE_PARAM_TYPE_MEMREF_INOUT,
@@ -167,8 +188,11 @@ static TEE_Result nua3500_ks_read(uint32_t types,
 			   (io_read32(KS_CTL) & KS_CLT_FUNC_MASK));
 
 		/* Waiting for key store processing */
-		while (io_read32(KS_STS) & KS_STS_BUSY)
-			;
+		tee_time_get_sys_time(&t_start);
+		while (io_read32(KS_STS) & KS_STS_BUSY) {
+			if (is_timeout(&t_start, 500) == true)
+				return TEE_ERROR_KS_FAIL;
+		}
 
 		/* Read the key to key buffer */
 		cnt = 8;
@@ -203,6 +227,7 @@ static TEE_Result nua3500_ks_write(uint32_t types,
 	uint32_t  offset, cont_msk, buff_remain, key_wcnt;
 	uint32_t  *key_buff;
 	uint32_t  i, cnt;
+	TEE_Time  t_start;
 
 	if (types != TEE_PARAM_TYPES(TEE_PARAM_TYPE_VALUE_INPUT,
 				     TEE_PARAM_TYPE_MEMREF_INOUT,
@@ -270,9 +295,11 @@ static TEE_Result nua3500_ks_write(uint32_t types,
 		offset += cnt;
 
 		/* Waiting for key store processing */
-		while (io_read32(KS_STS) & KS_STS_BUSY)
-			;
-
+		tee_time_get_sys_time(&t_start);
+		while (io_read32(KS_STS) & KS_STS_BUSY) {
+			if (is_timeout(&t_start, 500) == true)
+				return TEE_ERROR_KS_FAIL;
+		}
 	} while (key_wcnt > 0);
 
 	/* Check error flag */
@@ -291,6 +318,7 @@ static TEE_Result nua3500_ks_erase(uint32_t types,
 				   TEE_Param params[TEE_NUM_PARAMS])
 {
 	vaddr_t   ks_base = core_mmu_get_va(KS_BASE, MEM_AREA_IO_SEC);
+	TEE_Time  t_start;
 
 	if (types != TEE_PARAM_TYPES(TEE_PARAM_TYPE_VALUE_INPUT,
 				     TEE_PARAM_TYPE_NONE,
@@ -329,8 +357,11 @@ static TEE_Result nua3500_ks_erase(uint32_t types,
 		   (io_read32(KS_CTL) & KS_CLT_FUNC_MASK));
 
 	/* Waiting for processing */
-	while (io_read32(KS_STS) & KS_STS_BUSY)
-		;
+	tee_time_get_sys_time(&t_start);
+	while (io_read32(KS_STS) & KS_STS_BUSY) {
+		if (is_timeout(&t_start, 500) == true)
+			return TEE_ERROR_KS_FAIL;
+	}
 
 	/* Check error flag */
 	if (io_read32(KS_STS) & KS_STS_EIF) {
@@ -343,6 +374,7 @@ static TEE_Result nua3500_ks_erase(uint32_t types,
 static TEE_Result nua3500_ks_erase_all(void)
 {
 	vaddr_t   ks_base = core_mmu_get_va(KS_BASE, MEM_AREA_IO_SEC);
+	TEE_Time  t_start;
 
 	if (io_read32(KS_STS) & KS_STS_BUSY) {
 		EMSG("KS is busy!\n");
@@ -359,8 +391,11 @@ static TEE_Result nua3500_ks_erase_all(void)
 		   (io_read32(KS_CTL) & KS_CLT_FUNC_MASK));
 
 	/* Waiting for processing */
-	while (io_read32(KS_STS) & KS_STS_BUSY)
-		;
+	tee_time_get_sys_time(&t_start);
+	while (io_read32(KS_STS) & KS_STS_BUSY) {
+		if (is_timeout(&t_start, 500) == true)
+			return TEE_ERROR_KS_FAIL;
+	}
 
 	/* Check error flag */
 	if (io_read32(KS_STS) & KS_STS_EIF) {
@@ -374,6 +409,7 @@ static TEE_Result nua3500_ks_revoke(uint32_t types,
 				    TEE_Param params[TEE_NUM_PARAMS])
 {
 	vaddr_t   ks_base = core_mmu_get_va(KS_BASE, MEM_AREA_IO_SEC);
+	TEE_Time  t_start;
 
 	if (types != TEE_PARAM_TYPES(TEE_PARAM_TYPE_VALUE_INPUT,
 				     TEE_PARAM_TYPE_NONE,
@@ -412,8 +448,11 @@ static TEE_Result nua3500_ks_revoke(uint32_t types,
 		   (io_read32(KS_CTL) & KS_CLT_FUNC_MASK));
 
 	/* Waiting for processing */
-	while (io_read32(KS_STS) & KS_STS_BUSY)
-		;
+	tee_time_get_sys_time(&t_start);
+	while (io_read32(KS_STS) & KS_STS_BUSY) {
+		if (is_timeout(&t_start, 500) == true)
+			return TEE_ERROR_KS_FAIL;
+	}
 
 	/* Check error flag */
 	if (io_read32(KS_STS) & KS_STS_EIF) {
