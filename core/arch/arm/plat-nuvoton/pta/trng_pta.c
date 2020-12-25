@@ -11,6 +11,8 @@
 #include <kernel/tee_time.h>
 #include <mm/core_memprot.h>
 #include <platform_config.h>
+#include <tee/cache.h>
+#include <tsi_cmd.h>
 #include <io.h>
 #include <string.h>
 #include <trng_pta_client.h>
@@ -203,7 +205,7 @@ static TEE_Result nua3500_trng_init(uint32_t types,
 				0x4562a67f, 0x5443ca1a, 0x845a2c0b, 0x74223a2b,
 				0x398ce2a7, 0x93c5b66a, 0x56567ac1, 0xcb3eaa16,
 				0xda47f33b, 0x456a2e5b, 0xc44d56ae, 0x778d3c1a };
-	vaddr_t sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_NSEC);
+	vaddr_t sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
 	vaddr_t trng_base = core_mmu_get_va(TRNG_BASE, MEM_AREA_IO_SEC);
 	vaddr_t tsi_base = core_mmu_get_va(TSI_BASE, MEM_AREA_IO_SEC);
 	int	ret;
@@ -216,34 +218,52 @@ static TEE_Result nua3500_trng_init(uint32_t types,
 		return TEE_ERROR_BAD_PARAMETERS;
 	}
 
-	if (!(io_read32(sys_base + SYS_CHIPCFG) & TSIEN)) {
-		if ((io_read32(tsi_base + 0x210) & 0x7) != 0x2) {
-			do {
-				io_write32(tsi_base + 0x100, 0x59);
-				io_write32(tsi_base + 0x100, 0x16);
-				io_write32(tsi_base + 0x100, 0x88);
-			} while (io_read32(tsi_base + 0x100) == 0UL);
+	if (io_read32(sys_base + SYS_CHIPCFG) & TSIEN) {
 
-			io_write32(tsi_base + 0x240, TSI_PLL_SETTING);
+		ret = nua3500_tsi_init();
+		if (ret != 0)
+			return ret;
 
-			/* wait PLL stable */
-			while ((io_read32(tsi_base + 0x250) & 0x4) == 0)
-				;
-
-			/* Select TSI HCLK from PLL */
-			io_write32(tsi_base + 0x210, (io_read32(tsi_base +
-				   0x210) & ~0x7) | 0x2);
+		ret = TSI_TRNG_Init(1, (uint32_t)((uint64_t)nonce));
+		if (ret == ST_WAIT_TSI_SYNC) {
+			if (TSI_Sync() != ST_SUCCESS)
+				return TEE_ERROR_TRNG_BUSY;
+			ret = TSI_TRNG_Init(1, (uint32_t)((uint64_t)nonce));
 		}
-		/* enable TRNG engine clock */
-		io_write32(tsi_base + 0x20c, io_read32(tsi_base + 0x20c) |
-			   (1 << 25));
+		if (ret != ST_SUCCESS)
+			return TEE_ERROR_TRNG_GEN_NOISE;
+
+		FMSG("TSI_TRNG init done.\n");
+		return TEE_SUCCESS;
 	}
+
+	if ((io_read32(tsi_base + 0x210) & 0x7) != 0x2) {
+		do {
+			io_write32(tsi_base + 0x100, 0x59);
+			io_write32(tsi_base + 0x100, 0x16);
+			io_write32(tsi_base + 0x100, 0x88);
+		} while (io_read32(tsi_base + 0x100) == 0UL);
+
+		io_write32(tsi_base + 0x240, TSI_PLL_SETTING);
+
+		/* wait PLL stable */
+		while ((io_read32(tsi_base + 0x250) & 0x4) == 0)
+			;
+
+		/* Select TSI HCLK from PLL */
+		io_write32(tsi_base + 0x210, (io_read32(tsi_base +
+			   0x210) & ~0x7) | 0x2);
+	}
+
+	/* enable TRNG engine clock */
+	io_write32(tsi_base + 0x20c, io_read32(tsi_base + 0x20c) |
+		   (1 << 25));
 
 	if (nua3500_trng_wait_busy_clear(trng_base) != 0)
 		return TEE_ERROR_TRNG_BUSY;
 
-	if (io_read32(STAT) &
-		(STAT_STARTUP_TEST_STUCK | STAT_STARTUP_TEST_IN_PROG)) {
+	if (io_read32(STAT) & (STAT_STARTUP_TEST_STUCK |
+		STAT_STARTUP_TEST_IN_PROG)) {
 		/* TRNG startup in progress state! */
 		return TEE_ERROR_TRNG_BUSY;
 	}
@@ -271,6 +291,7 @@ static TEE_Result nua3500_trng_read(uint32_t types,
 {
 	uint32_t *rdata = NULL;
 	uint32_t rq_size = 0, get_size = 0;
+	vaddr_t sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
 	vaddr_t trng_base = core_mmu_get_va(TRNG_BASE, MEM_AREA_IO_SEC);
 	int	i, ret;
 
@@ -291,6 +312,20 @@ static TEE_Result nua3500_trng_read(uint32_t types,
 	if (!rdata)
 		return TEE_ERROR_BAD_PARAMETERS;
 
+	if ((io_read32(sys_base + SYS_CHIPCFG) & TSIEN)) {
+		/*
+		 * TSI enabled. Invoke TSI command and return here.
+		 */
+		cache_operation(TEE_CACHEINVALIDATE, rdata, rq_size);
+
+		ret = TSI_TRNG_Gen_Random(rq_size / 4,
+					  (uint32_t)virt_to_phys(rdata));
+		if (ret != ST_SUCCESS)
+			return TEE_ERROR_TRNG_FAILED;
+
+		return 0;
+	}
+
 	while (rq_size >= 4) {
 		if (nua3500_trng_wait_busy_clear(trng_base) != 0)
 			return TEE_ERROR_TRNG_BUSY;
@@ -309,7 +344,7 @@ static TEE_Result nua3500_trng_read(uint32_t types,
 		}
 	}
 	params[0].memref.size = get_size;
-	EMSG("reqsize = %d, get_size=%d\n", rq_size, get_size);
+	FMSG("reqsize = %d, get_size=%d\n", rq_size, get_size);
 	return 0;
 }
 

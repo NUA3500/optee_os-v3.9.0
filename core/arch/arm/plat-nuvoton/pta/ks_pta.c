@@ -10,7 +10,9 @@
 #include <kernel/timer.h>
 #include <kernel/tee_time.h>
 #include <mm/core_memprot.h>
+#include <tee/cache.h>
 #include <platform_config.h>
+#include <tsi_cmd.h>
 #include <io.h>
 #include <string.h>
 #include <ks_pta_client.h>
@@ -67,6 +69,9 @@
 #define KS_OP_REVOKE		(0x4 << KS_CTL_OPMODE_POS)
 #define KS_OP_REMAN		(0x5 << KS_CTL_OPMODE_POS)
 
+#define KS_TOMETAKEY(x)		(((x) << KS_META_KNUM_POS) & KS_META_KNUM_MSK)
+#define KS_TOKEYIDX(x)		(((x) & KS_META_KNUM_MSK) >> KS_META_KNUM_POS)
+
 static uint16_t _keylen2wcnt[21] = {4, 6, 6, 7, 8, 8, 8, 9, 12, 13, 16, 17,
 				    18, 0, 0, 0, 32, 48, 64, 96, 128};
 
@@ -86,52 +91,53 @@ static bool is_timeout(TEE_Time *t_start, uint32_t timeout)
 
 static TEE_Result nua3500_ks_init(void)
 {
-	vaddr_t sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_NSEC);
+	vaddr_t sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
 	vaddr_t ks_base = core_mmu_get_va(KS_BASE, MEM_AREA_IO_SEC);
 	vaddr_t tsi_base = core_mmu_get_va(TSI_BASE, MEM_AREA_IO_SEC);
 	TEE_Time  t_start;
 
-	if (!(io_read32(sys_base + SYS_CHIPCFG) & TSIEN)) {
-		if ((io_read32(tsi_base + 0x210) & 0x7) != 0x2) {
-			do {
-				io_write32(tsi_base + 0x100, 0x59);
-				io_write32(tsi_base + 0x100, 0x16);
-				io_write32(tsi_base + 0x100, 0x88);
-			} while (io_read32(tsi_base + 0x100) == 0UL);
+	if (io_read32(sys_base + SYS_CHIPCFG) & TSIEN)
+		return nua3500_tsi_init();
 
-			io_write32(tsi_base + 0x240, TSI_PLL_SETTING);
+	if ((io_read32(tsi_base + 0x210) & 0x7) != 0x2) {
+		do {
+			io_write32(tsi_base + 0x100, 0x59);
+			io_write32(tsi_base + 0x100, 0x16);
+			io_write32(tsi_base + 0x100, 0x88);
+		} while (io_read32(tsi_base + 0x100) == 0UL);
 
-			/* wait PLL stable */
-			while ((io_read32(tsi_base + 0x250) & 0x4) == 0)
-				;
+		io_write32(tsi_base + 0x240, TSI_PLL_SETTING);
 
-			/* Select TSI HCLK from PLL */
-			io_write32(tsi_base + 0x210, (io_read32(tsi_base +
-				   0x210) & ~0x7) | 0x2);
-		}
+		/* wait PLL stable */
+		while ((io_read32(tsi_base + 0x250) & 0x4) == 0)
+			;
 
-		/* enable Key Store engine clock */
-		io_write32(tsi_base + 0x204, io_read32(tsi_base + 0x204) |
-			   (1 << 14));
+		/* Select TSI HCLK from PLL */
+		io_write32(tsi_base + 0x210, (io_read32(tsi_base +
+			   0x210) & ~0x7) | 0x2);
+	}
 
-		/*
-		 * Initialize Key Store
-		 */
-		io_write32(KS_CTL, KS_CTL_INIT | KS_CTL_START);
+	/* enable Key Store engine clock */
+	io_write32(tsi_base + 0x204, io_read32(tsi_base + 0x204) |
+		   (1 << 14));
 
-		/* Waiting for init done */
-		tee_time_get_sys_time(&t_start);
-		while ((io_read32(KS_STS) & KS_STS_INITDONE) == 0) {
-			if (is_timeout(&t_start, 500) == true)
-				return TEE_ERROR_KS_FAIL;
-		}
+	/*
+	 * Initialize Key Store
+	 */
+	io_write32(KS_CTL, KS_CTL_INIT | KS_CTL_START);
 
-		/* Waiting for busy cleared */
-		tee_time_get_sys_time(&t_start);
-		while (io_read32(KS_STS) & KS_STS_BUSY) {
-			if (is_timeout(&t_start, 500) == true)
-				return TEE_ERROR_KS_FAIL;
-		}
+	/* Waiting for init done */
+	tee_time_get_sys_time(&t_start);
+	while ((io_read32(KS_STS) & KS_STS_INITDONE) == 0) {
+		if (is_timeout(&t_start, 500) == true)
+			return TEE_ERROR_KS_FAIL;
+	}
+
+	/* Waiting for busy cleared */
+	tee_time_get_sys_time(&t_start);
+	while (io_read32(KS_STS) & KS_STS_BUSY) {
+		if (is_timeout(&t_start, 500) == true)
+			return TEE_ERROR_KS_FAIL;
 	}
 	return TEE_SUCCESS;
 }
@@ -139,11 +145,13 @@ static TEE_Result nua3500_ks_init(void)
 static TEE_Result nua3500_ks_read(uint32_t types,
 				  TEE_Param params[TEE_NUM_PARAMS])
 {
+	vaddr_t   sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
 	vaddr_t   ks_base = core_mmu_get_va(KS_BASE, MEM_AREA_IO_SEC);
 	uint32_t  offset, cont_msk, remain_cnt;
 	uint32_t  *key_buff;
 	uint32_t  i, cnt;
 	TEE_Time  t_start;
+	int       ret;
 
 	if (types != TEE_PARAM_TYPES(TEE_PARAM_TYPE_VALUE_INPUT,
 				     TEE_PARAM_TYPE_MEMREF_INOUT,
@@ -165,6 +173,24 @@ static TEE_Result nua3500_ks_read(uint32_t types,
 		}
 	}
 
+	remain_cnt = params[1].memref.size;
+	key_buff = params[1].memref.buffer;
+
+	cache_operation(TEE_CACHEINVALIDATE, key_buff, remain_cnt * 4);
+
+	if (io_read32(sys_base + SYS_CHIPCFG) & TSIEN) {
+		ret = TSI_KS_Read(params[0].value.a,        /* eType      */
+			params[0].value.b,                  /* i32KeyIdx  */
+			(uint32_t *)virt_to_phys(key_buff), /* au32Key    */
+			remain_cnt                          /* u32WordCnt */
+			);
+		if (ret != ST_SUCCESS) {
+			EMSG("TSI_KS_Read fail! 0x%x\n", ret);
+			return TEE_ERROR_KS_FAIL;
+		}
+		return TEE_SUCCESS;
+	}
+
 	if (io_read32(KS_STS) & KS_STS_BUSY) {
 		EMSG("KS is busy!\n");
 		return TEE_ERROR_KS_BUSY;
@@ -172,15 +198,13 @@ static TEE_Result nua3500_ks_read(uint32_t types,
 
 	/* Specify the key number */
 	io_write32(KS_METADATA, (params[0].value.a << KS_META_DST_POS) |
-		   params[0].value.b << KS_META_KNUM_POS);
+		   KS_TOMETAKEY(params[0].value.b));
 
 	/* Clear Status */
 	io_write32(KS_STS, KS_STS_EIF | KS_STS_IF);
 
 	offset = 0;
 	cont_msk = 0;
-	remain_cnt = params[1].memref.size;
-	key_buff = params[1].memref.buffer;
 
 	do {
 		/* Trigger to read the key */
@@ -223,11 +247,14 @@ static TEE_Result nua3500_ks_read(uint32_t types,
 static TEE_Result nua3500_ks_write(uint32_t types,
 				   TEE_Param params[TEE_NUM_PARAMS])
 {
+	vaddr_t   sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
 	vaddr_t   ks_base = core_mmu_get_va(KS_BASE, MEM_AREA_IO_SEC);
 	uint32_t  offset, cont_msk, buff_remain, key_wcnt;
 	uint32_t  *key_buff;
 	uint32_t  i, cnt;
+	uint32_t  metadata;
 	TEE_Time  t_start;
+	int       ret;
 
 	if (types != TEE_PARAM_TYPES(TEE_PARAM_TYPE_VALUE_INPUT,
 				     TEE_PARAM_TYPE_MEMREF_INOUT,
@@ -238,12 +265,35 @@ static TEE_Result nua3500_ks_write(uint32_t types,
 	}
 
 	if (params[0].value.a == KS_OTP) {
-		if (((params[0].value.b & KS_META_KNUM_MSK) >>
-		    KS_META_KNUM_POS) > 8)
+		if (KS_TOKEYIDX(params[0].value.b) > 8)
 			return TEE_ERROR_KS_INVALID;
 	} else {
 		if (params[0].value.a != KS_SRAM)
 			return TEE_ERROR_KS_INVALID;
+	}
+
+	buff_remain = params[1].memref.size;
+	key_buff = params[1].memref.buffer;
+
+	metadata = (params[0].value.a << KS_META_DST_POS) | params[0].value.b;
+
+	if (io_read32(sys_base + SYS_CHIPCFG) & TSIEN) {
+		cache_operation(TEE_CACHEFLUSH, key_buff, buff_remain * 4);
+		if (params[0].value.a == KS_OTP)
+			ret = TSI_KS_Write_OTP(KS_TOKEYIDX(params[0].value.b),
+					       metadata,
+					       (uint32_t *)
+					       virt_to_phys(key_buff));
+		else
+			ret = TSI_KS_Write_SRAM(metadata,
+						(uint32_t *)
+						virt_to_phys(key_buff),
+						&params[2].value.a);
+		if (ret != ST_SUCCESS) {
+			EMSG("TSI_KS_Write_ fail! 0x%x\n", ret);
+			return TEE_ERROR_KS_FAIL;
+		}
+		return TEE_SUCCESS;
 	}
 
 	if (io_read32(KS_STS) & KS_STS_BUSY) {
@@ -251,8 +301,7 @@ static TEE_Result nua3500_ks_write(uint32_t types,
 		return TEE_ERROR_KS_BUSY;
 	}
 
-	io_write32(KS_METADATA, (params[0].value.a << KS_META_DST_POS) |
-		   params[0].value.b);
+	io_write32(KS_METADATA, metadata);
 
 	/* Get word count of a key by indexing to size table */
 	i = ((params[0].value.b & KS_META_SIZE_MSK) >> KS_META_SIZE_POS);
@@ -262,8 +311,6 @@ static TEE_Result nua3500_ks_write(uint32_t types,
 		return TEE_ERROR_KS_INVALID;
 	}
 
-	buff_remain = params[1].memref.size;
-	key_buff = params[1].memref.buffer;
 	io_write32(KS_STS, KS_STS_EIF);		/* Clear error flag */
 	offset = 0;
 	cont_msk = 0;
@@ -309,16 +356,17 @@ static TEE_Result nua3500_ks_write(uint32_t types,
 	}
 
 	/* return key number */
-	params[2].value.a = (io_read32(KS_METADATA) & KS_META_KNUM_MSK) >>
-			     KS_META_KNUM_POS;
+	params[2].value.a = KS_TOKEYIDX(io_read32(KS_METADATA));
 	return TEE_SUCCESS;
 }
 
 static TEE_Result nua3500_ks_erase(uint32_t types,
 				   TEE_Param params[TEE_NUM_PARAMS])
 {
+	vaddr_t   sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
 	vaddr_t   ks_base = core_mmu_get_va(KS_BASE, MEM_AREA_IO_SEC);
 	TEE_Time  t_start;
+	int       ret;
 
 	if (types != TEE_PARAM_TYPES(TEE_PARAM_TYPE_VALUE_INPUT,
 				     TEE_PARAM_TYPE_NONE,
@@ -340,6 +388,15 @@ static TEE_Result nua3500_ks_erase(uint32_t types,
 		}
 	}
 
+	if (io_read32(sys_base + SYS_CHIPCFG) & TSIEN) {
+		ret = TSI_KS_EraseKey(params[0].value.a, params[0].value.b);
+		if (ret != ST_SUCCESS) {
+			EMSG("TSI_KS_EraseKey fail! 0x%x\n", ret);
+			return TEE_ERROR_KS_FAIL;
+		}
+		return TEE_SUCCESS;
+	}
+
 	if (io_read32(KS_STS) & KS_STS_BUSY) {
 		EMSG("KS is busy!\n");
 		return TEE_ERROR_KS_BUSY;
@@ -347,7 +404,7 @@ static TEE_Result nua3500_ks_erase(uint32_t types,
 
 	/* Specify the key number */
 	io_write32(KS_METADATA, (params[0].value.a << KS_META_DST_POS) |
-		   params[0].value.b << KS_META_KNUM_POS);
+		   KS_TOMETAKEY(params[0].value.b));
 
 	/* Clear Status */
 	io_write32(KS_STS, KS_STS_EIF | KS_STS_IF);
@@ -373,8 +430,19 @@ static TEE_Result nua3500_ks_erase(uint32_t types,
 
 static TEE_Result nua3500_ks_erase_all(void)
 {
+	vaddr_t   sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
 	vaddr_t   ks_base = core_mmu_get_va(KS_BASE, MEM_AREA_IO_SEC);
 	TEE_Time  t_start;
+	int       ret;
+
+	if (io_read32(sys_base + SYS_CHIPCFG) & TSIEN) {
+		ret = TSI_KS_EraseAll();
+		if (ret != ST_SUCCESS) {
+			EMSG("TSI_KS_EraseAll fail! 0x%x\n", ret);
+			return TEE_ERROR_KS_FAIL;
+		}
+		return TEE_SUCCESS;
+	}
 
 	if (io_read32(KS_STS) & KS_STS_BUSY) {
 		EMSG("KS is busy!\n");
@@ -408,8 +476,10 @@ static TEE_Result nua3500_ks_erase_all(void)
 static TEE_Result nua3500_ks_revoke(uint32_t types,
 				    TEE_Param params[TEE_NUM_PARAMS])
 {
+	vaddr_t   sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
 	vaddr_t   ks_base = core_mmu_get_va(KS_BASE, MEM_AREA_IO_SEC);
 	TEE_Time  t_start;
+	int       ret;
 
 	if (types != TEE_PARAM_TYPES(TEE_PARAM_TYPE_VALUE_INPUT,
 				     TEE_PARAM_TYPE_NONE,
@@ -431,6 +501,15 @@ static TEE_Result nua3500_ks_revoke(uint32_t types,
 		}
 	}
 
+	if (io_read32(sys_base + SYS_CHIPCFG) & TSIEN) {
+		ret = TSI_KS_RevokeKey(params[0].value.a, params[0].value.b);
+		if (ret != ST_SUCCESS) {
+			EMSG("TSI_KS_RevokeKey fail! 0x%x\n", ret);
+			return TEE_ERROR_KS_FAIL;
+		}
+		return TEE_SUCCESS;
+	}
+
 	if (io_read32(KS_STS) & KS_STS_BUSY) {
 		EMSG("KS is busy!\n");
 		return TEE_ERROR_KS_BUSY;
@@ -438,7 +517,7 @@ static TEE_Result nua3500_ks_revoke(uint32_t types,
 
 	/* Specify the key number */
 	io_write32(KS_METADATA, (params[0].value.a << KS_META_DST_POS) |
-		   params[0].value.b << KS_META_KNUM_POS);
+		   KS_TOMETAKEY(params[0].value.b));
 
 	/* Clear Status */
 	io_write32(KS_STS, KS_STS_EIF | KS_STS_IF);
@@ -465,8 +544,10 @@ static TEE_Result nua3500_ks_revoke(uint32_t types,
 static TEE_Result nua3500_ks_remain(uint32_t types,
 				    TEE_Param params[TEE_NUM_PARAMS])
 {
+	vaddr_t   sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
 	vaddr_t   ks_base = core_mmu_get_va(KS_BASE, MEM_AREA_IO_SEC);
 	uint32_t  reg_data;
+	int       ret;
 
 	if (types != TEE_PARAM_TYPES(TEE_PARAM_TYPE_VALUE_OUTPUT,
 				     TEE_PARAM_TYPE_NONE,
@@ -474,6 +555,15 @@ static TEE_Result nua3500_ks_remain(uint32_t types,
 				     TEE_PARAM_TYPE_NONE)) {
 		EMSG("bad parameters types: 0x%" PRIx32, types);
 		return TEE_ERROR_BAD_PARAMETERS;
+	}
+
+	if (io_read32(sys_base + SYS_CHIPCFG) & TSIEN) {
+		ret = TSI_KS_GetRemainSize(&params[0].value.a);
+		if (ret != ST_SUCCESS) {
+			EMSG("TSI_KS_GetRemainSize fail! 0x%x\n", ret);
+			return TEE_ERROR_KS_FAIL;
+		}
+		return TEE_SUCCESS;
 	}
 
 	if (io_read32(KS_STS) & KS_STS_BUSY) {
@@ -494,7 +584,7 @@ static TEE_Result invoke_command(void *pSessionContext __unused,
 				 uint32_t nCommandID, uint32_t nParamTypes,
 				 TEE_Param pParams[TEE_NUM_PARAMS])
 {
-	EMSG("command entry point for pseudo-TA \"%s\"", PTA_NAME);
+	// EMSG("command entry point for pseudo-TA \"%s\"", PTA_NAME);
 
 	switch (nCommandID) {
 	case PTA_CMD_KS_INIT:

@@ -218,6 +218,7 @@
 #define ECC_KSCTL_RSRCK			(0x1 << 5)
 #define ECC_KSCTL_RSSRCK_OFFSET		6
 #define ECC_KSCTL_RSSRCK_MASK		(0x3 << 6)
+#define ECC_KSCTL_ECDH			(0x1 << 14)
 #define ECC_KSCTL_TRUST			(0x1 << 16)
 #define ECC_KSCTL_PRIV			(0x1 << 18)
 #define ECC_KSCTL_XY			(0x1 << 20)
@@ -266,5 +267,25 @@
 #define RSA_KSSTS1_NUM6_MASK		(0x1f << 16)
 #define RSA_KSSTS1_NUM7_OFFSET		24
 #define RSA_KSSTS1_NUM7_MASK		(0x1f << 24)
+
+#define AES_MODE_ECB			0UL
+#define AES_MODE_CBC			1UL
+#define AES_MODE_CFB			2UL
+#define AES_MODE_OFB			3UL
+#define AES_MODE_CTR			4UL
+#define AES_MODE_CBC_CS1		0x10UL
+#define AES_MODE_CBC_CS2		0x11UL
+#define AES_MODE_CBC_CS3		0x12UL
+#define AES_MODE_GCM			0x20UL
+#define AES_MODE_GHASH			0x21UL
+#define AES_MODE_CCM			0x22UL
+
+#define SHA_MODE_SEL_OFFSET		12
+#define SHA_MODE_SEL_MASK		(0x7 << 12)
+#define SHA_MODE_SEL_SHA1		0UL
+#define SHA_MODE_SEL_SHA2		0UL
+#define SHA_MODE_SEL_SHA3		1UL
+#define SHA_MODE_SEL_SM3		2UL
+#define SHA_MODE_SEL_MD5		4UL
 
 #endif /* __CRYPTO_PTA_H */

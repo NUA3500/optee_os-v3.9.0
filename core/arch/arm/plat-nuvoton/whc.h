@@ -5,24 +5,17 @@
 #ifndef __WHC_H__
 #define __WHC_H__
 
-typedef struct whc_t {
-	uint32_t WKCTL;
-	uint32_t INTEN;
-	uint32_t INTSTS;
-	uint32_t RESERVE0[13];
-	uint32_t CPSTS;
-	uint32_t RESERVE1[15];
-	uint32_t GINTTRG;
-	uint32_t RESERVE2[15];
-	uint32_t TXCTL;
-	uint32_t TXSTS;
-	uint32_t RXCTL;
-	uint32_t RXSTS;
-	uint32_t RESERVE3[12];
-	uint32_t TMDAT[4][4];
-	uint32_t RESERVE4[48];
-	uint32_t RMDAT[4][4];
-} WHC_T;
+#define WKCTL			0x000
+#define INTEN			0x004
+#define INTSTS			0x008
+#define CPSTS			0x040
+#define GINTTRG			0x080
+#define TXCTL			0x0C0
+#define TXSTS			0x0C4
+#define RXCTL			0x0C8
+#define RXSTS			0x0CC
+#define TMDAT(x, y)		(0x100 + ((x) * 0x10) + ((y) * 0x4))
+#define RMDAT(x, y)		(0x200 + ((x) * 0x10) + ((y) * 0x4))
 
 #define WHC_WKCTL_RST0WKEN_Pos              (0)
 #define WHC_WKCTL_RST0WKEN_Msk              (0x1ul << WHC_WKCTL_RST0WKEN_Pos)
@@ -278,8 +271,6 @@ typedef struct whc_t {
 
 #define WHC_RMDAT_DAT_Pos                   (0)
 #define WHC_RMDAT_DAT_Msk                   (0xfffffffful << WHC_RMDAT_DAT_Pos)
-
-#define WHC1       ((volatile WHC_T *)WHC1_BASE)
 
 #endif
 

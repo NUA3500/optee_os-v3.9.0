@@ -63,6 +63,14 @@
 #define CMD_KS_REMAIN_SIZE      0x0A15
 #define CMD_KS_GET_STATUS       0x0A20
 
+#define CMD_EX_GET_VERSION      0xFE02
+#define	CMD_EX_AES_SET_MODE     0xFE10
+#define	CMD_EX_AES_SET_IV       0xFE11
+#define	CMD_EX_AES_SET_KEY      0xFE12
+#define	CMD_EX_AES_RUN          0xFE13
+#define CMD_EX_AES_GCM_RUN      0xFE15
+#define CMD_EX_AES_ACCESS_FDBCK 0xFE17
+
 /*------------------------------------------------------------------*/
 /*  TSI command ACK status                                          */
 /*------------------------------------------------------------------*/
@@ -184,38 +192,61 @@ enum {
 
 void tsi_print_err_code(int code);
 
+int nua3500_tsi_init(void);
 int TSI_Sync(void);
 int TSI_Get_Version(uint32_t *ver_code);
 int TSI_Reset(void);
 int TSI_Config_UART(uint32_t line, uint32_t baud);
 int TSI_Set_Clock(int pllsrc, int clksel);
+int TSI_Load_Image(uint32_t base, uint32_t size);
 int TSI_Open_Session(int class_code, int *session_id);
 int TSI_Close_Session(int class_code, int session_id);
-int TSI_AES_Set_Mode(int sid, int kinswap, int koutswap, int inswap, int outswap,
-		     int sm4en, int encrypt, int mode, int keysz, int ks,
-		     int ks_num);
+int TSI_TRNG_Init(int method, uint32_t pb_addr);
+int TSI_TRNG_Gen_Random(uint32_t wcnt, uint32_t dest_addr);
+int TSI_PRNG_ReSeed(int seed_src, uint32_t seed);
+int TSI_PRNG_Gen_Random(uint32_t *rnd_w0, uint32_t *rnd_w1);
+int TSI_PRNG_Gen_Random_Mass(uint32_t wcnt, uint32_t dest_addr);
+int TSI_PRNG_GenTo_KS_SRAM(uint32_t owner, int is_ecdsa, int is_ecdh,
+			   uint32_t keysz, int *key_num);
+int TSI_AES_Set_Mode(int sid, int kinswap, int koutswap, int inswap,
+		     int outswap, int sm4en, int encrypt, int mode,
+		     int keysz, int ks, int ks_num);
 int TSI_AES_Set_IV(int sid, uint32_t iv_addr);
 int TSI_AES_Set_Key(int sid, int keysz, uint32_t key_addr);
 int TSI_AES_Run(int sid, int is_last, int data_cnt, uint32_t src_addr,
 		uint32_t dest_addr);
+int TSI_AES_Run_RM(uint32_t aes_map_addr, uint32_t aes_ksctl);
 int TSI_AES_GCM_Run(int sid, int is_last, int data_cnt, uint32_t param_addr);
 int TSI_Access_Feedback(int sid, int rw, int wcnt, uint32_t fdbck_addr);
 int TSI_SHA_Start(int sid, int inswap, int outswap, int mode_sel, int hmac,
-		  int mode, int keylen, int ks, int ks_num);
+		int mode, int keylen, int ks, int ks_num);
 int TSI_SHA_Update(int sid, int data_cnt, uint32_t src_addr);
 int TSI_SHA_Finish(int sid, int wcnt, int data_cnt, uint32_t src_addr,
-		   uint32_t dest_addr);
+		uint32_t dest_addr);
 int TSI_SHA_All_At_Once(int inswap, int outswap, int mode_sel, int mode,
-			int wcnt, int data_cnt, uint32_t src_addr,
-			uint32_t dest_addr);
+		int wcnt, int data_cnt, uint32_t src_addr,
+		uint32_t dest_addr);
 int TSI_ECC_GenPublicKey(int curve_id, int is_ecdh, int psel,
-			 int d_knum, uint32_t priv_key, uint32_t pub_key);
+		int d_knum, uint32_t priv_key, uint32_t pub_key);
 int TSI_ECC_GenSignature(int curve_id, int rsel, int psel, int key_idx,
-			 uint32_t param_addr, uint32_t sig_addr);
+		uint32_t param_addr, uint32_t sig_addr);
 int TSI_ECC_VerifySignature(int curve_id, int psel, int x_knum,
-			    int y_knum, uint32_t param_addr);
-int TSI_ECC_Multiply(int curve_id, int type, int msel, int sps,
-		     int m_knum, int x_knum, int y_knum, uint32_t param_addr,
+		int y_knum, uint32_t param_addr);
+int TSI_ECC_Multiply(int curve_id, int type, int msel, int sps, int m_knum,
+		     int x_knum, int y_knum, uint32_t param_addr,
 		     uint32_t dest_addr);
+int TSI_RSA_Exp_Mod(int rsa_len, int crt, int esel, int e_knum,
+		    uint32_t param_addr, uint32_t dest_addr);
+int  TSI_KS_Write_SRAM(uint32_t u32Meta, uint32_t au32Key[],
+		       uint32_t *iKeyNum);
+int  TSI_KS_Write_OTP(int KeyNum, uint32_t u32Meta, uint32_t au32Key[]);
+int  TSI_KS_Read(int eType, int32_t i32KeyIdx, uint32_t au32Key[],
+		 uint32_t u32WordCnt);
+int  TSI_KS_RevokeKey(int eType, int32_t i32KeyIdx);
+int  TSI_KS_EraseKey(int eType, int32_t i32KeyIdx);
+int  TSI_KS_EraseAll(void);
+int  TSI_KS_GetRemainSize(uint32_t *remain_size);
+int  TSI_KS_GetStatus(uint32_t *ks_sts, uint32_t *ks_otpsts,
+		      uint32_t *ks_metadata);
 
 #endif	/* __TSI_CMD_H__ */

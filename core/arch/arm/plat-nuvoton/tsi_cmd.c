@@ -6,11 +6,19 @@
 #include <platform_config.h>
 #include <stdint.h>
 #include <string.h>
+#include <mm/core_memprot.h>
+#include <kernel/timer.h>
+#include <kernel/tee_time.h>
 #include <tee/entry_std.h>
 #include <tee/entry_fast.h>
 #include <io.h>
 #include <whc.h>
 #include <tsi_cmd.h>
+
+#define KS_META_SIZE_POS           8
+#define PRNG_KSCTL_OWNER_POS       24
+#define PRNG_KSCTL_ECDH            (0x1 << 19)
+#define PRNG_KSCTL_ECDSA           (0x1 << 20)
 
 typedef struct err_code_t {
 	int	code;
@@ -42,6 +50,23 @@ ERR_CODE_T _err_code_tbl[] = {
 	{ ST_CMD_ACK_TIME_OUT,     "ST_CMD_ACK_TIME_OUT" },
 };
 
+#define nu_write_reg(reg, val)	io_write32(whc1_base + (reg), (val))
+#define nu_read_reg(reg)	io_read32(whc1_base + (reg))
+
+static bool is_timeout(TEE_Time *t_start, uint32_t timeout)
+{
+	TEE_Time  t_now;
+	uint32_t  time_elapsed;
+
+	tee_time_get_sys_time(&t_now);
+	time_elapsed = (t_now.seconds - t_start->seconds) * 1000 +
+		    (int)t_now.millis - (int)t_start->millis;
+
+	if (time_elapsed > timeout)
+		return true;
+	return false;
+}
+
 void tsi_print_err_code(int code)
 {
 	uint32_t i;
@@ -57,11 +82,11 @@ void tsi_print_err_code(int code)
 
 static int tsi_send_command(TSI_REQ_T *req)
 {
+	vaddr_t   whc1_base = core_mmu_get_va(WHC1_BASE, MEM_AREA_IO_SEC);
 	int	i;
 
-	//t0 = get_ticks();
 	for (i = 0; i < 4; i++) {
-		if (WHC1->TXSTS & (1 << i))	/* Check CHxRDY */
+		if (nu_read_reg(TXSTS) & (1 << i))  /* Check CHxRDY */
 			break;
 	}
 
@@ -70,60 +95,55 @@ static int tsi_send_command(TSI_REQ_T *req)
 		return ST_WHC_TX_BUSY;
 	}
 	
-	EMSG("TSI CMD: 0x%x 0x%x 0x%x 0x%x\n", req->cmd[0], req->cmd[1],
-	     req->cmd[2], req->cmd[3]);
+	//EMSG("TSI CMD: 0x%x 0x%x 0x%x 0x%x\n", req->cmd[0], req->cmd[1],
+	//     req->cmd[2], req->cmd[3]);
 
-	WHC1->TMDAT[i][0] = req->cmd[0];
-	WHC1->TMDAT[i][1] = req->cmd[1];
-	WHC1->TMDAT[i][2] = req->cmd[2];
-	WHC1->TMDAT[i][3] = req->cmd[3];
-	WHC1->TXCTL = (1 << i);	/* send message */
+	nu_write_reg(TMDAT(i, 0), req->cmd[0]);
+	nu_write_reg(TMDAT(i, 1), req->cmd[1]);
+	nu_write_reg(TMDAT(i, 2), req->cmd[2]);
+	nu_write_reg(TMDAT(i, 3), req->cmd[3]);
+	nu_write_reg(TXCTL, (1 << i));
 	req->tx_channel = i;
-
-	//req->tx_jiffy = get_ticks();
 	return 0;
 }
 
-//int tsi_wait_ack(TSI_REQ_T *req, int time_out)
-static int tsi_wait_ack(TSI_REQ_T *req)
+static int tsi_wait_ack(TSI_REQ_T *req, int time_out)
 {
-	int	i;
+	vaddr_t   whc1_base = core_mmu_get_va(WHC1_BASE, MEM_AREA_IO_SEC);
+	TEE_Time  t_start;
+	int  i = 0;
 
-	//t0 = get_ticks();
-	while (1) {
-		for (i = 0; i < 4; i++) {
-			if (WHC1->RXSTS & (1 << i)) {	/* Check CHxRDY */
-				if ((WHC1->RMDAT[i][0] & TCK_CHR_MASK) ==
-					(req->cmd[0] & TCK_CHR_MASK)) {
-					req->ack[0] = WHC1->RMDAT[i][0];
-					req->ack[1] = WHC1->RMDAT[i][1];
-					req->ack[2] = WHC1->RMDAT[i][2];
-					req->ack[3] = WHC1->RMDAT[i][3];
-					WHC1->RXCTL = (1 << i);	/* set CHxACK */
+	tee_time_get_sys_time(&t_start);
+	while (is_timeout(&t_start, time_out) == false) {
+		if (nu_read_reg(RXSTS) & (1 << i)) {	/* Check CHxRDY */
+			if ((nu_read_reg(RMDAT(i, 0)) & TCK_CHR_MASK) ==
+			    (req->cmd[0] & TCK_CHR_MASK)) {
+				req->ack[0] = nu_read_reg(RMDAT(i, 0));
+				req->ack[1] = nu_read_reg(RMDAT(i, 1));
+				req->ack[2] = nu_read_reg(RMDAT(i, 2));
+				req->ack[3] = nu_read_reg(RMDAT(i, 3));
+				nu_write_reg(RXCTL, (1 << i)); /* set CHxACK */
 
-					//EMSG("ACK: 0x%x 0x%x 0x%x 0x%x\n",
-					// req->ack[0], req->ack[1], req->ack[2],
-					// req->ack[3]);
-					return 0;
-				}
+				//EMSG("ACK: 0x%x 0x%x 0x%x 0x%x\n",
+				// req->ack[0], req->ack[1], req->ack[2],
+				// req->ack[3]);
+				return 0;
 			}
 		}
+		i = (i + 1) % 4;
 	}
+	return ST_TIME_OUT;
 }
 
 static int tsi_send_command_and_wait(TSI_REQ_T *req, int time_out)
 {
 	int ret;
 
-	if (time_out == 0)
-		return -1;
-
 	ret = tsi_send_command(req);
 	if (ret != 0)
 		return ret;
 
-	//ret = tsi_wait_ack(req, time_out);
-	ret = tsi_wait_ack(req);
+	ret = tsi_wait_ack(req, time_out);
 	if (ret != 0)
 		return ret;
 	return TA_GET_STATUS(req);
@@ -198,7 +218,8 @@ int TSI_Config_UART(uint32_t line, uint32_t baud)
 
 /*
  * @brief    Set TSI system clock.
- * @param[in]  pllsrc   0: PLL clock source from HXT; 1: PLL clock source from HIRC.
+ * @param[in]  pllsrc   0: PLL clock source from HXT;
+ *                      1: PLL clock source from HIRC.
  * @param[in]  clksel   Select TSI system clock rate
  *                      0:  72 MHz
  *                      1:  96 MHz
@@ -228,8 +249,31 @@ int TSI_Set_Clock(int pllsrc, int clksel)
 }
 
 /*
+ * @brief    Load a patch image into TSI.
+ * @param[in]  base      Physical address of the TSI image.
+ * @param[in]  size      Size of the TSI image.
+ * @return   0          success
+ * @return   otherwise  Refer to ST_XXX error code.
+ */
+int TSI_Load_Image(uint32_t base, uint32_t size)
+{
+	TSI_REQ_T  req;
+	int        ret;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_TSI_LOAD_EX_FUNC << 16);
+	req.cmd[1] = base;
+	req.cmd[2] = size;
+	ret = tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+	if (ret != 0)
+		return ret;
+	return 0;
+}
+
+/*
  * @brief    Request an encrypt/decrypt session for AES or SHA.
- * @param[in]   class_code   The command class. Should be C_CODE_AES or C_CODE_SHA.
+ * @param[in]   class_code   The command class. Should be C_CODE_AES
+ *                           or C_CODE_SHA.
  * @param[out]  session_id   The session ID.
  * @return   0               success
  * @return   otherwise       Refer to ST_XXX error code.
@@ -250,7 +294,8 @@ int TSI_Open_Session(int class_code, int *session_id)
 
 /*
  * @brief    Close an opened session.
- * @param[in]   class_code   The command class. Should be C_CODE_AES or C_CODE_SHA.
+ * @param[in]   class_code   The command class. Should be C_CODE_AES
+ *                           or C_CODE_SHA.
  * @param[in]   session_id   The session ID.
  * @return   0               success
  * @return   otherwise       Refer to ST_XXX error code.
@@ -260,8 +305,182 @@ int TSI_Close_Session(int class_code, int session_id)
 	TSI_REQ_T req;
 
 	memset(&req, 0, sizeof(req));
-	req.cmd[0] = (CMD_TSI_CLOSE_SESSION << 16) | (class_code << 8) | session_id;
+	req.cmd[0] = (CMD_TSI_CLOSE_SESSION << 16) | (class_code << 8) |
+			session_id;
 	return tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+}
+
+/*
+ * @brief    TRNG init
+ * @param[in]   method      0x0: Self-seeding. Seed is from TRNG noise
+ *                          0x1: Nonce seeding. Seed is from noise and user
+ *                               provied nonce data, which is put in
+ *                               parameter block and length is 48 words.
+ *                          0x2: User seed. Seed is from user provided data,
+ *                               which is put in parameter block and length
+ *                               is 12 words.
+ * @param[in]   pb_addr     Address of parameter block. Not used if <method>
+ *                          is 0.
+ *                          If <method> is 0x1, <param> should contains
+ *                          48 words nounce data.
+ *                          If (method> is 0x2, <param> should contains
+ *                          12 words user defined seed.
+ * @return   0              success
+ * @return   otherwise      Refer to ST_XXX error code.
+ */
+int TSI_TRNG_Init(int method, uint32_t pb_addr)
+{
+	TSI_REQ_T  req;
+	int  ret;
+
+	if (method != 0 && method != 1 && method != 2)
+		return ST_INVALID_PARAM;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_TRNG_INIT << 16) | method;
+	req.cmd[1] = pb_addr;
+	ret = tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+	return ret;
+}
+
+/*
+ * @brief    Request TRNG to generate random numbers.
+ * @param[in]  wnct          Word count of random numbers
+ * @param[in]  dest_addr     Destination address.
+ * @return   0               success
+ * @return   otherwise       Refer to ST_XXX error code.
+ */
+int TSI_TRNG_Gen_Random(uint32_t wcnt, uint32_t dest_addr)
+{
+	TSI_REQ_T  req;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_TRNG_GEN_RANDOM << 16);
+	req.cmd[2] = wcnt;
+	req.cmd[3] = dest_addr;
+	return tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+}
+
+/*
+ * @brief    PRNG re-seed
+ * @param[in]   seed_src     0: Seed is generated from TSI TRNG.
+ *                           1: Use the <seed> as PRNG seed.
+ * @param[in]   seed         PRNG seed
+ * @return   0               success
+ * @return   otherwise       Refer to ST_XXX error code.
+ */
+int TSI_PRNG_ReSeed(int seed_src, uint32_t seed)
+{
+	TSI_REQ_T  req;
+	int  ret;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_PRNG_RESEED << 16);
+	req.cmd[1] = seed_src;
+	req.cmd[2] = seed;
+	ret = tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+	return ret;
+}
+
+/*
+ * @brief    Request PRNG to generate a 64-bits random number.
+ * @param[out]  rnd_w0       random number word 0
+ * @param[out]  rnd_w1       random number word 1
+ * @return   0               success
+ * @return   otherwise       Refer to ST_XXX error code.
+ */
+int TSI_PRNG_Gen_Random(uint32_t *rnd_w0, uint32_t *rnd_w1)
+{
+	TSI_REQ_T  req;
+	int        ret;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_PRNG_GEN_RANDOM << 16);
+	ret = tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+	*rnd_w0 = req.ack[1];
+	*rnd_w1 = req.ack[2];
+	return ret;
+}
+
+/*
+ * @brief    Request PRNG to generate mass random numbers.
+ * @param[in]  wnct          Word count of random numbers
+ * @param[in]  dest_addr     Destination address.
+ * @return   0               success
+ * @return   otherwise       Refer to ST_XXX error code.
+ */
+int TSI_PRNG_Gen_Random_Mass(uint32_t wcnt, uint32_t dest_addr)
+{
+	TSI_REQ_T  req;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_PRNG_GEN_RAN_MASS << 16);
+	req.cmd[2] = wcnt;
+	req.cmd[3] = dest_addr;
+	return tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+}
+
+/**
+ * @brief    Request PRNG to generate a random key to Key Store SRAM
+ * @param[in]  owner       Owner of the random key.
+ *                           0x0: Only for AES used
+ *                           0x1: Only for HMAC used
+ *                           0x4: Only for ECC used
+ *                           0x5: Only for CPU used
+ * @param[in]  is_ecdsa    1: Only for ECC ECDSA
+ * @param[in]  is_ecdh     1: Only for ECC ECDH
+ * @param[in]  keysz       Random key size
+ *                             - KS_META_AES
+ *                             - KS_META_HMAC
+ *                             - KS_META_RSA_EXP
+ *                             - KS_META_RSA_MID
+ *                             - KS_META_ECC
+ *                             - KS_META_CPU
+ *                             - KS_META_128
+ *                             - KS_META_163
+ *                             - KS_META_192
+ *                             - KS_META_224
+ *                             - KS_META_233
+ *                             - KS_META_255
+ *                             - KS_META_256
+ *                             - KS_META_283
+ *                             - KS_META_384
+ *                             - KS_META_409
+ *                             - KS_META_512
+ *                             - KS_META_521
+ *                             - KS_META_571
+ *                             - KS_META_1024
+ *                             - KS_META_2048
+ *                             - KS_META_4096
+ *                             - KS_META_BOOT
+ *                             - KS_META_READABLE
+ *                             - KS_META_PRIV
+ *                             - KS_META_NONPRIV
+ *                             - KS_META_SECURE
+ *                             - KS_META_NONSECUR
+ * @param[out]  key_num    Key Store KS_SRAM key number of the random key
+ * @return   0             success
+ * @return   otherwise     Refer to ST_XXX error code.
+ */
+int TSI_PRNG_GenTo_KS_SRAM(uint32_t owner, int is_ecdsa, int is_ecdh,
+			   uint32_t keysz, int *key_num)
+{
+	TSI_REQ_T  req;
+	int        ret;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_PRNG_GEN_KS_SRAM << 16);
+	req.cmd[1] = (owner << PRNG_KSCTL_OWNER_POS) |
+			(keysz >> KS_META_SIZE_POS);
+	if (is_ecdh)
+		req.cmd[1] |= PRNG_KSCTL_ECDH;
+	else if (is_ecdsa)
+		req.cmd[1] |= PRNG_KSCTL_ECDSA;
+
+	ret = tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+	if (ret == 0)
+		*key_num = req.ack[1];
+	return 0;
 }
 
 /*
@@ -413,8 +632,8 @@ int TSI_AES_GCM_Run(int sid, int is_last, int data_cnt, uint32_t param_addr)
 /*
  * @brief    Read or write AES/SM4 intermediate feedback data.
  * @param[in]  sid           The session ID obtained from TSI_Open_Session().
- * @param[in]  rw            1: write feedback data
- *                           0: read feedback data
+ * @param[in]  rw            1: read feedback data
+ *                           0: write feedback data
  * @param[in]  wcnt          Word count of feedback data
  * @param[in]  fdbck_addr    Feedback data address
  * @return   0               success
@@ -454,11 +673,15 @@ int TSI_Access_Feedback(int sid, int rw, int wcnt, uint32_t fdbck_addr)
  *                      - \ref SHA_MODE_SHA512
  *                      - \ref SHA_MODE_SHAKE128
  *                      - \ref SHA_MODE_SHAKE256
- * @param[in]  keylen   HMAC key length in bytes. Only effective when <hmac> is 1.
+ * @param[in]  keylen   HMAC key length in bytes. Only effective when
+ *                      <hmac> is 1.
  * @param[in]  ks       Key source
- *                      SEL_KEY_FROM_REG:      HMAC key is from TSI_SHA_Update()
- *                      SEL_KEY_FROM_KS_SRAM:  HMAC key is from TSI Key Store SRAM
- *                      SEL_KEY_FROM_KS_OTP:   HMAC key is from TSI Key Store OTP
+ *                      SEL_KEY_FROM_REG:     HMAC key is from
+ *                                            TSI_SHA_Update()
+ *                      SEL_KEY_FROM_KS_SRAM: HMAC key is from TSI Key
+ *                                            Store SRAM
+ *                      SEL_KEY_FROM_KS_OTP:  HMAC key is from TSI Key
+ *                                            Store OTP
  * @param[in]  ks_num   Key Store key number
  * @return   0          success
  * @return   otherwise  Refer to ST_XXX error code.
@@ -553,9 +776,11 @@ int TSI_SHA_All_At_Once(int inswap, int outswap, int mode_sel, int mode,
 	TSI_REQ_T req;
 
 	memset(&req, 0, sizeof(req));
-	req.cmd[0] = (CMD_SHA_ALL_AT_ONCE << 16) | ((data_cnt >> 8) & 0xffff);
-	req.cmd[1] = ((data_cnt & 0xff) << 24) | (inswap << 23) | (outswap << 22) |
-			(mode_sel << 12) | (mode << 8) | wcnt;
+	req.cmd[0] = (CMD_SHA_ALL_AT_ONCE << 16) |
+			((data_cnt >> 8) & 0xffff);
+	req.cmd[1] = ((data_cnt & 0xff) << 24) | (inswap << 23) |
+			(outswap << 22) | (mode_sel << 12) |
+			(mode << 8) | wcnt;
 	req.cmd[2] = src_addr;
 	req.cmd[3] = dest_addr;
 	return tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
@@ -567,13 +792,13 @@ int TSI_SHA_All_At_Once(int inswap, int outswap, int mode_sel, int mode,
  * @param[in]  is_ecdh       Only used when psel is ECC_KEY_SEL_KS_SRAM.
  *                           0: is not ECDH key.
  *                           1: is ECDH key.
- * @param[in]  psel          Select private key source
- *                           ECC_KEY_SEL_TRNG    : Private key is generated by TRNG
- *                           ECC_KEY_SEL_KS_OTP  : Private Key is from Key Store OTP
- *                           ECC_KEY_SEL_KS_SRAM : Private Key is from Key Store SRAM
- *                           ECC_KEY_SEL_USER    : User defined private key
- * @param[in]  d_knum        The Key Store key index. Effective only when <psel>
- *                           is 0x01 or 0x02.
+ * @param[in]  psel   Select private key source
+ *                    ECC_KEY_SEL_TRNG    : Private key is generated by TRNG
+ *                    ECC_KEY_SEL_KS_OTP  : Private Key is from Key Store OTP
+ *                    ECC_KEY_SEL_KS_SRAM : Private Key is from Key Store SRAM
+ *                    ECC_KEY_SEL_USER    : User defined private key
+ * @param[in]  d_knum        The Key Store key index. Effective only when
+ *                           <psel> is 0x01 or 0x02.
  * @param[in]  priv_key      Address of input private key. Effective only when
  *                           <psel> is 0x03.
  * @param[in]  pub_key       Address of the output public key.
@@ -597,18 +822,19 @@ int TSI_ECC_GenPublicKey(int curve_id, int is_ecdh, int psel,
  * @brief    Generate an ECC signature.
  * @param[in]  curve_id      ECC curve ID
  * @param[in]  rsel          0: Random number is generated by TSI TRNG
- *                           1: Use the random number specified in parameter block.
- * @param[in]  psel          Select private key source
- *                           ECC_KEY_SEL_TRNG    : Private key is generated by TRNG
- *                           ECC_KEY_SEL_KS_OTP  : Private Key is from Key Store OTP
- *                           ECC_KEY_SEL_KS_SRAM : Private Key is from Key Store SRAM
- *                           ECC_KEY_SEL_USER    : User defined private key
- * @param[in]  d_knum        The Key Store key index. Effective only when <psel>
- *                           is 0x01 or 0x02.
- * @param[in]  param_addr    Address of the input parameter block, including message
- *                           and private key.
- *                           The private key in parameter block is effective only
- *                           when <psel> is 0x03.
+ *                           1: Use the random number specified in
+ *                              parameter block.
+ * @param[in]  psel  Select private key source
+ *                   ECC_KEY_SEL_TRNG    : Private key is generated by TRNG
+ *                   ECC_KEY_SEL_KS_OTP  : Private Key is from Key Store OTP
+ *                   ECC_KEY_SEL_KS_SRAM : Private Key is from Key Store SRAM
+ *                   ECC_KEY_SEL_USER    : User defined private key
+ * @param[in]  d_knum        The Key Store key index. Effective only when
+ *                           <psel> is 0x01 or 0x02.
+ * @param[in]  param_addr    Address of the input parameter block, including
+ *                           message and private key.
+ *                           The private key in parameter block is effective
+ *                           only when <psel> is 0x03.
  * @param[in]  sig_addr      Address of the output signature.
  * @return   0               success
  * @return   otherwise       Refer to ST_XXX error code.
@@ -630,13 +856,13 @@ int TSI_ECC_GenSignature(int curve_id, int rsel, int psel, int d_knum,
  * @brief    Generate an ECC signature.
  * @param[in]  curve_id      ECC curve ID
  * @param[in]  psel          Select public key source
- *                           ECC_KEY_SEL_KS_OTP : Public key is from Key Store OTP
- *                           ECC_KEY_SEL_KS_SRAM: Public key is from Key Store SRAM
- *                           ECC_KEY_SEL_USER   : Public key is from parameter block
- * @param[in]  x_knum        The Key Store key number of public key X. Effective
- *                           only when <psel> is 0x01 or 0x02.
- * @param[in]  y_knum        The Key Store key number of public key Y. Effective only
- *                           when <psel> is 0x01 or 0x02.
+ *                   ECC_KEY_SEL_KS_OTP : Public key is from Key Store OTP
+ *                   ECC_KEY_SEL_KS_SRAM: Public key is from Key Store SRAM
+ *                   ECC_KEY_SEL_USER   : Public key is from parameter block
+ * @param[in]  x_knum        The Key Store key number of public key X.
+ *                           Effective only when <psel> is 0x01 or 0x02.
+ * @param[in]  y_knum        The Key Store key number of public key Y.
+ *                           Effective only when <psel> is 0x01 or 0x02.
  * @param[in]  param_addr    Address of the input parameter block.
  * @return   0               success
  * @return   otherwise       Refer to ST_XXX error code.
@@ -677,16 +903,278 @@ int TSI_ECC_VerifySignature(int curve_id, int psel, int x_knum,
  * @return   otherwise       Refer to ST_XXX error code.
  */
 int TSI_ECC_Multiply(int curve_id, int type, int msel, int sps,
-		     int m_knum, int x_knum, int y_knum, uint32_t param_addr,
-		     uint32_t dest_addr)
+		     int m_knum, int x_knum, int y_knum,
+		     uint32_t param_addr, uint32_t dest_addr)
 {
 	TSI_REQ_T req;
 
 	memset(&req, 0, sizeof(req));
 	req.cmd[0] = (CMD_ECC_MULTIPLY << 16) | curve_id;
-	req.cmd[1] = (type << 28) | (msel << 26) | (sps << 24) | (m_knum << 16) |
-			(x_knum << 8) | (y_knum);
+	req.cmd[1] = (type << 28) | (msel << 26) | (sps << 24) |
+			(m_knum << 16) | (x_knum << 8) | (y_knum);
 	req.cmd[2] = param_addr;
 	req.cmd[3] = dest_addr;
 	return tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+}
+
+/*
+ * @brief    Execute RSA exponent modulus.
+ * @param[in]  rsa_len      RSA bit length
+ *                            0: 1024 bits
+ *                            1: 2048 bits
+ *                            2: 3072 bits
+ *                            3: 4096 bits
+ * @param[in]  crt            0: disable CRT; 1: enable CRT
+ * @param[in]  esel         Select private key source
+ *                          RSA_KEY_SEL_KS_OTP: Exponent of exponentiation
+ *                            is from Key Store OTP
+ *                          RSA_KEY_SEL_KS_SRAM : Exponent of exponentiation
+ *                            is from Key Store SRAM
+ *                          RSA_KEY_SEL_USER: Exponent of exponentiation
+ *                            is from input parameter block.
+ * @param[in]  e_knum       The Key Store key number of RSA exponent E.
+ *                          Used only when <esel> is RSA_KEY_SEL_KS_OTP
+ *                          or RSA_KEY_SEL_KS_SRAM.
+ * @param[in]  param_addr   Address of the input parameter block.
+ * @param[in]  dest_addr    Address of the output data.
+ * @return   0              success
+ * @return   otherwise      Refer to ST_XXX error code.
+ */
+int TSI_RSA_Exp_Mod(int rsa_len, int crt, int esel, int e_knum,
+		    uint32_t param_addr, uint32_t dest_addr)
+{
+	TSI_REQ_T  req;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_RSA_EXP_MOD << 16) | rsa_len;
+	req.cmd[1] = (crt << 10) | (esel << 8) | e_knum;
+	req.cmd[2] = param_addr;
+	req.cmd[3] = dest_addr;
+	return tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+}
+
+/*
+ * @brief      Write key to key store SRAM
+ * @param[in]  u32Meta      The metadata of the key.
+ *                          It could be the combine of
+ *                             - KS_META_AES
+ *                             - KS_META_HMAC
+ *                             - KS_META_RSA_EXP
+ *                             - KS_META_RSA_MID
+ *                             - KS_META_ECC
+ *                             - KS_META_CPU
+ *                             - KS_META_128
+ *                             - KS_META_163
+ *                             - KS_META_192
+ *                             - KS_META_224
+ *                             - KS_META_233
+ *                             - KS_META_255
+ *                             - KS_META_256
+ *                             - KS_META_283
+ *                             - KS_META_384
+ *                             - KS_META_409
+ *                             - KS_META_512
+ *                             - KS_META_521
+ *                             - KS_META_571
+ *                             - KS_META_1024
+ *                             - KS_META_2048
+ *                             - KS_META_4096
+ *                             - KS_META_BOOT
+ *                             - KS_META_READABLE
+ *                             - KS_META_PRIV
+ *                             - KS_META_NONPRIV
+ *                             - KS_META_SECURE
+ *                             - KS_META_NONSECUR
+ * @param[out] au32Key       The buffer to store the key.
+ * @param[in]  iKeyNum       The SRAM key number which the key was written to.
+ * @return   0               success
+ * @return   otherwise       Refer to ST_XXX error code.
+ */
+int  TSI_KS_Write_SRAM(uint32_t u32Meta, uint32_t au32Key[], uint32_t *iKeyNum)
+{
+	TSI_REQ_T  req;
+	int  ret;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_KS_WRITE_SRAM_KEY << 16);
+	req.cmd[1] = u32Meta;
+	req.cmd[2] = (uint32_t)((uint64_t)au32Key);
+	ret = tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+	*iKeyNum = req.ack[1];
+	return ret;
+}
+
+/*
+ * @brief      Write key to key store OTP
+ * @param[out] iKeyNum      Key number of the OTP key to write
+ * @param[in]  u32Meta      The metadata of the key.
+ *                          It could be the combine of
+ *                             - KS_META_AES
+ *                             - KS_META_HMAC
+ *                             - KS_META_RSA_EXP
+ *                             - KS_META_RSA_MID
+ *                             - KS_META_ECC
+ *                             - KS_META_CPU
+ *                             - KS_META_128
+ *                             - KS_META_163
+ *                             - KS_META_192
+ *                             - KS_META_224
+ *                             - KS_META_233
+ *                             - KS_META_255
+ *                             - KS_META_256
+ *                             - KS_META_283
+ *                             - KS_META_384
+ *                             - KS_META_409
+ *                             - KS_META_512
+ *                             - KS_META_521
+ *                             - KS_META_571
+ *                             - KS_META_1024
+ *                             - KS_META_2048
+ *                             - KS_META_4096
+ *                             - KS_META_BOOT
+ *                             - KS_META_READABLE
+ *                             - KS_META_PRIV
+ *                             - KS_META_NONPRIV
+ *                             - KS_META_SECURE
+ *                             - KS_META_NONSECUR
+ * @param[out] au32Key       The buffer to store the key
+ * @return   0               success
+ * @return   otherwise       Refer to ST_XXX error code.
+ */
+int  TSI_KS_Write_OTP(int KeyNum, uint32_t u32Meta, uint32_t au32Key[])
+{
+	TSI_REQ_T  req;
+	int  ret;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_KS_WRITE_OTP_KEY << 16);
+	req.cmd[1] = u32Meta;
+	req.cmd[2] = (uint32_t)((uint64_t)au32Key);
+	req.cmd[3] = KeyNum;
+	ret = tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+	return ret;
+}
+
+/*
+ * @brief      Read key from key store
+ * @param[in]  eType       The memory type. It could be:
+ *                           - KS_SRAM
+ *                           - KS_OTP
+ * @param[in]  i32KeyIdx   The key index to read
+ * @param[out] au32Key     The buffer to store the key
+ * @param[in]  u32WordCnt  The word (32-bit) count of the key buffer size
+ * @return   0             success
+ * @return   otherwise     Refer to ST_XXX error code.
+ */
+int  TSI_KS_Read(int eType, int32_t i32KeyIdx,
+		 uint32_t au32Key[], uint32_t u32WordCnt)
+{
+	TSI_REQ_T  req;
+	int  ret;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_KS_READ_KEY << 16);
+	req.cmd[1] = (eType << 30) | (u32WordCnt << 8) | i32KeyIdx;
+	req.cmd[2] = (uint32_t)((uint64_t)au32Key);
+	ret = tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+	return ret;
+}
+
+/*
+ * @brief      Revoke a key in key store
+ * @param[in]  eType       The memory type. It could be:
+ *                           - KS_SRAM
+ *                           - KS_OTP
+ * @param[in]  i32KeyIdx   The key index to read
+ * @return   0             success
+ * @return   otherwise     Refer to ST_XXX error code.
+ */
+int  TSI_KS_RevokeKey(int eType, int32_t i32KeyIdx)
+{
+	TSI_REQ_T  req;
+	int  ret;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_KS_REVOKE_KEY << 16);
+	req.cmd[1] = (eType << 30) | i32KeyIdx;
+	ret = tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+	return ret;
+}
+
+/*
+ * @brief      Erase a key from key store
+ * @param[in]    eType     The memory type. It could be:
+ *                           - KS_SRAM
+ *                           - KS_OTP
+ * @param[in]  i32KeyIdx   The key index to erase
+ * @return   0             success
+ * @return   otherwise     Refer to ST_XXX error code.
+ */
+int  TSI_KS_EraseKey(int eType, int32_t i32KeyIdx)
+{
+	TSI_REQ_T  req;
+	int  ret;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_KS_ERASE_KEY << 16);
+	req.cmd[1] = (eType << 30) | i32KeyIdx;
+	ret = tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+	return ret;
+}
+
+/*
+ * @brief      Erase all keys from Key Store SRAM
+ * @return     0               success
+ * @return     otherwise       Refer to ST_XXX error code.
+ */
+int  TSI_KS_EraseAll(void)
+{
+	TSI_REQ_T  req;
+	int  ret;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_KS_ERASE_ALL << 16);
+	ret = tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+	return ret;
+}
+
+/*
+ * @brief      Get remain size of Key Store SRAM
+ * @param[in]  remain_size   Remain size of KS_SRAM
+ * @return   0               success
+ * @return   otherwise       Refer to ST_XXX error code.
+ */
+int  TSI_KS_GetRemainSize(uint32_t *remain_size)
+{
+	TSI_REQ_T  req;
+	int  ret;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_KS_REMAIN_SIZE << 16);
+	ret = tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+	*remain_size = req.ack[1];
+	return ret;
+}
+
+/*
+ * @brief       Get status of Key Store
+ * @param[out]  ks_sts       content of KS_STS register
+ * @param[out]  ks_otpsts    content of KS_OTPSTS register
+ * @param[out]  ks_metadata  content of KS_METADATA register
+ * @return   0               success
+ * @return   otherwise       Refer to ST_XXX error code.
+ */
+int  TSI_KS_GetStatus(uint32_t *ks_sts, uint32_t *ks_otpsts,
+		      uint32_t *ks_metadata)
+{
+	TSI_REQ_T  req;
+	int  ret;
+
+	memset(&req, 0, sizeof(req));
+	req.cmd[0] = (CMD_KS_GET_STATUS << 16);
+	ret = tsi_send_command_and_wait(&req, CMD_TIME_OUT_2S);
+	*ks_sts = req.ack[1];
+	*ks_otpsts = req.ack[2];
+	*ks_metadata = req.ack[3];
+	return ret;
 }
