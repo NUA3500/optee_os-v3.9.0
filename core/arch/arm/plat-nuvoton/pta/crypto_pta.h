@@ -13,6 +13,8 @@
 #define INTEN_ECCEIEN			(0x1 << 23)
 #define INTEN_HMACIEN			(0x1 << 24)
 #define INTEN_HMACEIEN			(0x1 << 25)
+#define INTEN_RSAIEN			(0x1 << 30)
+#define INTEN_RSAEIEN			(0x1 << 31)
 #define INTSTS			0x004
 #define INTSTS_AESIF			(0x1 << 0)
 #define INTSTS_AESEIF			(0x1 << 1)
@@ -21,6 +23,8 @@
 #define INTSTS_ECCEIF			(0x1 << 23)
 #define INTSTS_HMACIF			(0x1 << 24)
 #define INTSTS_HMACEIF			(0x1 << 25)
+#define INTSTS_RSAIF			(0x1 << 30)
+#define INTSTS_RSAEIF			(0x1 << 31)
 
 #define PRNG_CTL		0x008
 #define PRNG_CTL_START			(0x1 << 0)

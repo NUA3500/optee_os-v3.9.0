@@ -20,7 +20,7 @@
 
 #define PTA_NAME "nvt_crypto.pta"
 
-#define CRYPTO_BUSY_TIMEOUT	2000
+#define RSA_BUSY_TIMEOUT    2000
 
 #define nu_write_reg(reg, val)	io_write32(crypto_base + (reg), (val))
 #define nu_read_reg(reg)	io_read32(crypto_base + (reg))
@@ -641,7 +641,7 @@ static TEE_Result tsi_rsa_run(uint32_t types,
 	uint32_t  rsa_ctl, rsa_ksctl;
 	int       ret;
 
-	if (types != TEE_PARAM_TYPES(TEE_PARAM_TYPE_VALUE_INPUT,
+	if (types != TEE_PARAM_TYPES(TEE_PARAM_TYPE_NONE,
 				     TEE_PARAM_TYPE_MEMREF_INOUT,
 				     TEE_PARAM_TYPE_NONE,
 				     TEE_PARAM_TYPE_NONE)) {
@@ -716,16 +716,12 @@ static TEE_Result nua3500_rsa_run(uint32_t types,
 
 	reg_map = params[1].memref.buffer;
 
-	nu_write_reg(HMAC_CTL, 0);
-	nu_write_reg(INTEN, nu_read_reg(INTEN) | (INTEN_HMACIEN |
-					INTEN_HMACEIEN));
-	nu_write_reg(INTSTS, (INTSTS_HMACIF | INTSTS_HMACEIF));
+	nu_write_reg(RSA_CTL, 0);
+	nu_write_reg(INTSTS, (INTSTS_RSAIF | INTSTS_RSAEIF));
 
 	nu_write_reg(RSA_KSCTL, reg_map[RSA_KSCTL / 4]);
 	nu_write_reg(RSA_KSSTS0, reg_map[RSA_KSSTS0 / 4]);
 	nu_write_reg(RSA_KSSTS1, reg_map[RSA_KSSTS1 / 4]);
-
-	reg_map = params[1].memref.buffer;
 
 	nu_write_reg(RSA_SADDR0, reg_map[RSA_SADDR0 / 4]);
 	nu_write_reg(RSA_SADDR1, reg_map[RSA_SADDR1 / 4]);
@@ -745,8 +741,8 @@ static TEE_Result nua3500_rsa_run(uint32_t types,
 
 	tee_time_get_sys_time(&t_start);
 	while ((nu_read_reg(RSA_STS) & RSA_STS_BUSY) ||
-	       !(nu_read_reg(RSA_CTL) & RSA_CTL_START)) {
-		if (is_timeout(&t_start, 500) == true)
+	       (nu_read_reg(RSA_CTL) & RSA_CTL_START)) {
+		if (is_timeout(&t_start, RSA_BUSY_TIMEOUT) == true)
 			return TEE_ERROR_CRYPTO_BUSY;
 	}
 	return TEE_SUCCESS;
@@ -760,8 +756,6 @@ static TEE_Result invoke_command(void *pSessionContext __unused,
 	int   tsi_en;
 
 	FMSG("command entry point for pseudo-TA \"%s\"", PTA_NAME);
-
-	EMSG("PTA cmd: %d\n", nCommandID);
 
 	if (io_read32(sys_base + SYS_CHIPCFG) & TSIEN)
 		tsi_en = 1;
