@@ -1,4 +1,4 @@
-PLATFORM_FLAVOR ?= NUA3500
+PLATFORM_FLAVOR ?= MA35D1
 
 include core/arch/arm/cpu/cortex-armv8-0.mk
 
@@ -27,7 +27,7 @@ endif
 
 CFG_WITH_STACK_CANARIES ?= y
 
-ifeq ($(PLATFORM_FLAVOR),NUA3500)
+ifeq ($(PLATFORM_FLAVOR),MA35D1)
 # 2**1 = 2 cores per cluster
 $(call force,CFG_CORE_CLUSTER_SHIFT,1)
 endif

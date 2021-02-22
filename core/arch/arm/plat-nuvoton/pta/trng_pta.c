@@ -23,7 +23,7 @@
 #define TRNG_BUSY_TIMEOUT	2000
 
 /*---------------------------------------------------------------------*/
-/*  NUA3500 TRNG registers                                             */
+/*  MA35D1 TRNG registers                                             */
 /*---------------------------------------------------------------------*/
 #define CTRL			(trng_base + 0x000)
 #define CTRL_CMD_OFFSET			(0)
@@ -121,7 +121,7 @@
 #define TCMD_RUN_KAT		0x8       /* Run KAT on DRBG or entropy source */
 #define TCMD_ZEROIZE		0xf       /* Zeroize                    */
 
-static int nua3500_trng_wait_busy_clear(vaddr_t trng_base)
+static int ma35d1_trng_wait_busy_clear(vaddr_t trng_base)
 {
 	TEE_Time  t_start, t_cur;
 	uint32_t  mytime;
@@ -138,12 +138,12 @@ static int nua3500_trng_wait_busy_clear(vaddr_t trng_base)
 	return 0;
 }
 
-static int nua3500_trng_issue_command(vaddr_t trng_base, int cmd)
+static int ma35d1_trng_issue_command(vaddr_t trng_base, int cmd)
 {
 	TEE_Time  t_start, t_cur;
 	uint32_t  mytime;
 
-	if (nua3500_trng_wait_busy_clear(trng_base) != 0)
+	if (ma35d1_trng_wait_busy_clear(trng_base) != 0)
 		return TEE_ERROR_TRNG_BUSY;
 
 	io_write32(CTRL, (io_read32(CTRL) &
@@ -165,7 +165,7 @@ static int nua3500_trng_issue_command(vaddr_t trng_base, int cmd)
 	return 0;
 }
 
-static int nua3500_trng_gen_nonce(vaddr_t trng_base, uint32_t *nonce)
+static int ma35d1_trng_gen_nonce(vaddr_t trng_base, uint32_t *nonce)
 {
 	int   i, j, loop, ret;
 
@@ -177,28 +177,28 @@ static int nua3500_trng_gen_nonce(vaddr_t trng_base, uint32_t *nonce)
 		loop = 2;
 
 	for (i = 0; i < loop; i++) {
-		if (nua3500_trng_wait_busy_clear(trng_base) != 0)
+		if (ma35d1_trng_wait_busy_clear(trng_base) != 0)
 			return TEE_ERROR_TRNG_BUSY;
 
 		for (j = 0; j < 16; j++)
 			io_write32(NPA_DATA(j), nonce[j]);
 
-		ret = nua3500_trng_issue_command(trng_base, TCMD_GEN_NONCE);
+		ret = ma35d1_trng_issue_command(trng_base, TCMD_GEN_NONCE);
 		if (ret != 0)
 			return TEE_ERROR_TRNG_GEN_NOISE;
 	}
 	return 0;
 }
 
-static int nua3500_trng_create_state(vaddr_t trng_base)
+static int ma35d1_trng_create_state(vaddr_t trng_base)
 {
-	if (nua3500_trng_wait_busy_clear(trng_base) != 0)
+	if (ma35d1_trng_wait_busy_clear(trng_base) != 0)
 		return TEE_ERROR_TRNG_BUSY;
 
-	return nua3500_trng_issue_command(trng_base, TCMD_CREATE_STATE);
+	return ma35d1_trng_issue_command(trng_base, TCMD_CREATE_STATE);
 }
 
-static TEE_Result nua3500_trng_init(uint32_t types,
+static TEE_Result ma35d1_trng_init(uint32_t types,
 				    TEE_Param params[TEE_NUM_PARAMS])
 {
 	uint32_t nonce[16] =  { 0xaf5781ca, 0xc5b733e2, 0x98cb7a6f, 0xb095a073,
@@ -220,7 +220,7 @@ static TEE_Result nua3500_trng_init(uint32_t types,
 
 	if (io_read32(sys_base + SYS_CHIPCFG) & TSIEN) {
 
-		ret = nua3500_tsi_init();
+		ret = ma35d1_tsi_init();
 		if (ret != 0)
 			return ret;
 
@@ -259,7 +259,7 @@ static TEE_Result nua3500_trng_init(uint32_t types,
 	io_write32(tsi_base + 0x20c, io_read32(tsi_base + 0x20c) |
 		   (1 << 25));
 
-	if (nua3500_trng_wait_busy_clear(trng_base) != 0)
+	if (ma35d1_trng_wait_busy_clear(trng_base) != 0)
 		return TEE_ERROR_TRNG_BUSY;
 
 	if (io_read32(STAT) & (STAT_STARTUP_TEST_STUCK |
@@ -271,11 +271,11 @@ static TEE_Result nua3500_trng_init(uint32_t types,
 	/* SELECT_ALG_AES_256 */
 	io_write32(MODE, io_read32(MODE) | MODE_SEC_ALG);
 
-	ret = nua3500_trng_gen_nonce(trng_base, nonce);
+	ret = ma35d1_trng_gen_nonce(trng_base, nonce);
 	if (ret != 0)
 		return ret;
 
-	ret = nua3500_trng_create_state(trng_base);
+	ret = ma35d1_trng_create_state(trng_base);
 	if (ret != 0)
 		return ret;
 
@@ -286,7 +286,7 @@ static TEE_Result nua3500_trng_init(uint32_t types,
 	return TEE_SUCCESS;
 }
 
-static TEE_Result nua3500_trng_read(uint32_t types,
+static TEE_Result ma35d1_trng_read(uint32_t types,
                                     TEE_Param params[TEE_NUM_PARAMS])
 {
 	uint32_t *rdata = NULL;
@@ -327,10 +327,10 @@ static TEE_Result nua3500_trng_read(uint32_t types,
 	}
 
 	while (rq_size >= 4) {
-		if (nua3500_trng_wait_busy_clear(trng_base) != 0)
+		if (ma35d1_trng_wait_busy_clear(trng_base) != 0)
 			return TEE_ERROR_TRNG_BUSY;
 
-		ret = nua3500_trng_issue_command(trng_base, TCMD_GEN_RANDOM);
+		ret = ma35d1_trng_issue_command(trng_base, TCMD_GEN_RANDOM);
 		if (ret != 0)
 			return ret;
 
@@ -356,10 +356,10 @@ static TEE_Result invoke_command(void *pSessionContext __unused,
 
 	switch (nCommandID) {
 	case PTA_CMD_TRNG_INIT:
-		return nua3500_trng_init(nParamTypes, pParams);
+		return ma35d1_trng_init(nParamTypes, pParams);
 	
 	case PTA_CMD_TRNG_READ:
-		return nua3500_trng_read(nParamTypes, pParams);
+		return ma35d1_trng_read(nParamTypes, pParams);
 	default:
 		break;
 	}

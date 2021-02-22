@@ -18,7 +18,7 @@
 #endif
 #endif /*ARM64*/
 
-#if defined(PLATFORM_FLAVOR_NUA3500)
+#if defined(PLATFORM_FLAVOR_MA35D1)
 
 #define GIC_BASE		0x50801000UL
 #define GICC_OFFSET		0x2000

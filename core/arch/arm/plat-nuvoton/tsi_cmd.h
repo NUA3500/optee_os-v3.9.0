@@ -192,7 +192,7 @@ enum {
 
 void tsi_print_err_code(int code);
 
-int nua3500_tsi_init(void);
+int ma35d1_tsi_init(void);
 int TSI_Sync(void);
 int TSI_Get_Version(uint32_t *ver_code);
 int TSI_Reset(void);

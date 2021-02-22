@@ -56,7 +56,7 @@ void console_init(void)
 	register_serial_console(&console_data.chip);
 }
 
-int nua3500_tsi_init(void)
+int ma35d1_tsi_init(void)
 {
 	vaddr_t sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
 	int  ret;

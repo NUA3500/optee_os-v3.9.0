@@ -22,7 +22,7 @@
 #define KS_BUSY_TIMEOUT		2000
 
 /*----------------------------------------------------------------------*/
-/*  NUA3500 Key Store registers                                         */
+/*  MA35D1 Key Store registers                                         */
 /*----------------------------------------------------------------------*/
 #define KS_CTL			(ks_base + 0x00)
 #define KS_CTL_START			(0x1 << 0)
@@ -89,7 +89,7 @@ static bool is_timeout(TEE_Time *t_start, uint32_t timeout)
 	return false;
 }
 
-static TEE_Result nua3500_ks_init(void)
+static TEE_Result ma35d1_ks_init(void)
 {
 	vaddr_t sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
 	vaddr_t ks_base = core_mmu_get_va(KS_BASE, MEM_AREA_IO_SEC);
@@ -97,7 +97,7 @@ static TEE_Result nua3500_ks_init(void)
 	TEE_Time  t_start;
 
 	if (io_read32(sys_base + SYS_CHIPCFG) & TSIEN)
-		return nua3500_tsi_init();
+		return ma35d1_tsi_init();
 
 	if ((io_read32(tsi_base + 0x210) & 0x7) != 0x2) {
 		do {
@@ -142,7 +142,7 @@ static TEE_Result nua3500_ks_init(void)
 	return TEE_SUCCESS;
 }
 
-static TEE_Result nua3500_ks_read(uint32_t types,
+static TEE_Result ma35d1_ks_read(uint32_t types,
 				  TEE_Param params[TEE_NUM_PARAMS])
 {
 	vaddr_t   sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
@@ -244,7 +244,7 @@ static TEE_Result nua3500_ks_read(uint32_t types,
 	return TEE_SUCCESS;
 }
 
-static TEE_Result nua3500_ks_write(uint32_t types,
+static TEE_Result ma35d1_ks_write(uint32_t types,
 				   TEE_Param params[TEE_NUM_PARAMS])
 {
 	vaddr_t   sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
@@ -360,7 +360,7 @@ static TEE_Result nua3500_ks_write(uint32_t types,
 	return TEE_SUCCESS;
 }
 
-static TEE_Result nua3500_ks_erase(uint32_t types,
+static TEE_Result ma35d1_ks_erase(uint32_t types,
 				   TEE_Param params[TEE_NUM_PARAMS])
 {
 	vaddr_t   sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
@@ -428,7 +428,7 @@ static TEE_Result nua3500_ks_erase(uint32_t types,
 	return TEE_SUCCESS;
 }
 
-static TEE_Result nua3500_ks_erase_all(void)
+static TEE_Result ma35d1_ks_erase_all(void)
 {
 	vaddr_t   sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
 	vaddr_t   ks_base = core_mmu_get_va(KS_BASE, MEM_AREA_IO_SEC);
@@ -473,7 +473,7 @@ static TEE_Result nua3500_ks_erase_all(void)
 	return TEE_SUCCESS;
 }
 
-static TEE_Result nua3500_ks_revoke(uint32_t types,
+static TEE_Result ma35d1_ks_revoke(uint32_t types,
 				    TEE_Param params[TEE_NUM_PARAMS])
 {
 	vaddr_t   sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
@@ -541,7 +541,7 @@ static TEE_Result nua3500_ks_revoke(uint32_t types,
 	return TEE_SUCCESS;
 }
 
-static TEE_Result nua3500_ks_remain(uint32_t types,
+static TEE_Result ma35d1_ks_remain(uint32_t types,
 				    TEE_Param params[TEE_NUM_PARAMS])
 {
 	vaddr_t   sys_base = core_mmu_get_va(SYS_BASE, MEM_AREA_IO_SEC);
@@ -588,25 +588,25 @@ static TEE_Result invoke_command(void *pSessionContext __unused,
 
 	switch (nCommandID) {
 	case PTA_CMD_KS_INIT:
-		return nua3500_ks_init();
+		return ma35d1_ks_init();
 
 	case PTA_CMD_KS_READ:
-		return nua3500_ks_read(nParamTypes, pParams);
+		return ma35d1_ks_read(nParamTypes, pParams);
 
 	case PTA_CMD_KS_WRITE:
-		return nua3500_ks_write(nParamTypes, pParams);
+		return ma35d1_ks_write(nParamTypes, pParams);
 
 	case PTA_CMD_KS_ERASE:
-		return nua3500_ks_erase(nParamTypes, pParams);
+		return ma35d1_ks_erase(nParamTypes, pParams);
 
 	case PTA_CMD_KS_ERASE_ALL:
-		return nua3500_ks_erase_all();
+		return ma35d1_ks_erase_all();
 
 	case PTA_CMD_KS_REVOKE:
-		return nua3500_ks_revoke(nParamTypes, pParams);
+		return ma35d1_ks_revoke(nParamTypes, pParams);
 
 	case PTA_CMD_KS_REMAIN:
-		return nua3500_ks_remain(nParamTypes, pParams);
+		return ma35d1_ks_remain(nParamTypes, pParams);
 
 	default:
 		break;
